@@ -15,8 +15,50 @@ import {
   walkingRoute,
   sketchRoute,
   traceSamples,
+  cleanSketchSpurs,
   type Point,
 } from '../lib/route.ts';
+import { directionLane, directionArrows } from '../lib/route-display.ts';
+
+void test('short accidental retrace is removed without shortcuts or inflated distance', () => {
+  const a: Point = [50, 30],
+    b: Point = [50.001, 30],
+    c: Point = [50.001, 30.001],
+    d: Point = [50.002, 30];
+  const walk = { points: [a, b, c, b, d], meters: 360, seconds: 300 };
+  const result = cleanSketchSpurs(walk, [a, b, d]);
+  assert.deepEqual(result.points, [a, b, d]);
+  assert.ok(result.meters < 360 && result.seconds < 300);
+  assert.equal(cleanSketchSpurs(walk, [a, b, c, b, d]), walk);
+  const loop = { ...walk, points: [a, b, c, d, b, a] };
+  assert.equal(cleanSketchSpurs(loop, [a, d, a]), loop);
+  const returning = { ...walk, points: [a, b, c, b, a] };
+  assert.equal(cleanSketchSpurs(returning, [a, b, c, b, a]), returning);
+});
+void test('opposite travel directions occupy separate pixel lanes with oriented arrows', () => {
+  const forward = directionLane([
+    { x: 0, y: 0 },
+    { x: 200, y: 0 },
+  ]);
+  const back = directionLane([
+    { x: 200, y: 0 },
+    { x: 0, y: 0 },
+  ]);
+  assert.equal(forward[0].y, 4);
+  assert.equal(back[0].y, -4);
+  const f = directionArrows(forward)[0],
+    b = directionArrows(back)[0];
+  assert.ok(f[1].x > f[0].x);
+  assert.ok(b[1].x < b[0].x);
+  assert.ok(
+    directionLane([
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 0, y: 0 },
+    ]).every((p) => Number.isFinite(p.x) && Number.isFinite(p.y)),
+  );
+});
 void test('personal stride changes step estimate and rejects invalid inputs', () => {
   assert.equal(stepsFor(7200, 72), 10000);
   assert.equal(stepsFor(7200, 80), 9000);
@@ -186,7 +228,7 @@ void test('short noisy straight sketch has two bends rather than 18 compulsory s
   ];
   assert.deepEqual(sampleSketch(corner), corner);
 });
-void test('sketch uses whole-line map matching and rejects disconnected partial results', async () => {
+void test('sketch matches the line and replaces fragmented matches with a through-route', async () => {
   const original = globalThis.fetch;
   const shape: Point[] = [
     [50, 30],
@@ -194,8 +236,28 @@ void test('sketch uses whole-line map matching and rejects disconnected partial 
     [50.002, 30],
   ];
   let partial = false;
+  let fallback = false;
   try {
     globalThis.fetch = async (url, init) => {
+      if (partial && typeof url === 'string' && url.includes('/route?')) {
+        fallback = true;
+        const body = JSON.parse(new URL(url).searchParams.get('json')!);
+        assert.ok(body.locations.length <= 8);
+        assert.ok(
+          body.locations
+            .slice(1, -1)
+            .every((p: { type: string }) => p.type === 'through'),
+        );
+        return new Response(
+          JSON.stringify({
+            trip: {
+              status: 0,
+              legs: [{ shape: encode(shape) }],
+              summary: { length: 0.24, time: 180 },
+            },
+          }),
+        );
+      }
       assert.ok(typeof url === 'string' && url.endsWith('/trace_route'));
       assert.equal(init?.method, 'POST');
       const body = JSON.parse(
@@ -228,6 +290,12 @@ void test('sketch uses whole-line map matching and rejects disconnected partial 
     );
     assert.equal(walk.meters, 240);
     partial = true;
+    assert.equal(
+      (await sketchRoute(shape[0], shape, new AbortController().signal)).meters,
+      240,
+    );
+    assert.equal(fallback, true);
+    globalThis.fetch = async () => new Response('', { status: 503 });
     await assert.rejects(
       sketchRoute(shape[0], shape, new AbortController().signal),
     );

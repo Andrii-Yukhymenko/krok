@@ -12,6 +12,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { DEFAULT_START, distance, type Point, type Walk } from '@/lib/route';
+import { directionLane, directionArrows } from '@/lib/route-display';
 
 type Props = {
   start: Point | null;
@@ -91,19 +92,7 @@ export default function WalkMap(props: Props) {
     const L = api.current,
       group = layers.current;
     group.clearLayers();
-    if (props.walk) {
-      L.polyline(props.walk.points, {
-        color: '#ffffff',
-        weight: 10,
-        opacity: 0.95,
-      }).addTo(group);
-      L.polyline(props.walk.points, {
-        color: '#19785c',
-        weight: 6,
-        lineCap: 'round',
-        lineJoin: 'round',
-      }).addTo(group);
-    } else if (props.points.length && props.start)
+    if (!props.walk && props.points.length && props.start)
       L.polyline(
         props.mode === 'draw' ? props.sketch : [props.start, ...props.points],
         {
@@ -150,6 +139,61 @@ export default function WalkMap(props: Props) {
         .addTo(group);
     });
   }, [ready, props.start, props.points, props.walk, props.mode, props.sketch]);
+  useEffect(() => {
+    const L = api.current,
+      m = map.current;
+    if (!ready || !L || !m || !props.walk) return;
+    const route = L.layerGroup().addTo(m);
+    const draw = () => {
+      route.clearLayers();
+      const lane = directionLane(
+        props.walk!.points.map((p) => m.latLngToLayerPoint(p)),
+      );
+      const latLngs = lane.map((p) => m.layerPointToLatLng(L.point(p.x, p.y)));
+      const common = {
+        interactive: false,
+        smoothFactor: 0,
+        lineCap: 'round' as const,
+      };
+      L.polyline(latLngs, { ...common, color: '#fff', weight: 8 }).addTo(route);
+      L.polyline(latLngs, { ...common, color: '#16634e', weight: 5 }).addTo(
+        route,
+      );
+      L.polyline(latLngs, {
+        ...common,
+        color: '#7de3bc',
+        weight: 2,
+        dashArray: '2 24',
+        className: 'route-flow',
+      }).addTo(route);
+      const viewport = m.getSize();
+      const arrows = directionArrows(lane).filter((arrow) => {
+        const p = m.layerPointToContainerPoint(L.point(arrow[1].x, arrow[1].y));
+        return (
+          p.x > -20 &&
+          p.y > -20 &&
+          p.x < viewport.x + 20 &&
+          p.y < viewport.y + 20
+        );
+      });
+      L.polyline(
+        arrows.map((arrow) =>
+          arrow.map((p) => m.layerPointToLatLng(L.point(p.x, p.y))),
+        ),
+        {
+          ...common,
+          color: '#fff',
+          weight: 2.2,
+        },
+      ).addTo(route);
+    };
+    draw();
+    m.on('zoomend moveend resize', draw);
+    return () => {
+      m.off('zoomend moveend resize', draw);
+      route.remove();
+    };
+  }, [ready, props.walk]);
   useEffect(() => {
     if (!ready || !container.current) return;
     const observer = new ResizeObserver(() =>
@@ -297,7 +341,8 @@ export default function WalkMap(props: Props) {
     >
       <div className="map-canvas" ref={container} />
       <div className="map-label">
-        <span className="live-dot" /> Пішохідна карта
+        <span className="live-dot" />{' '}
+        {props.walk ? 'Стрілки показують напрямок' : 'Пішохідна карта'}
       </div>
       {(props.drawing || props.pickingStart) && (
         <div className="map-instruction">

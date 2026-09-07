@@ -123,7 +123,7 @@ export function sketchLength(points: Point[]): number {
 export function traceSamples(points: Point[]): Point[] {
   const simplified = sampleSketch(points),
     length = sketchLength(simplified);
-  const spacing = Math.max(60, length / 350),
+  const spacing = Math.max(100, length / 350),
     out: Point[] = [];
   simplified.forEach((p, i) => {
     if (i) {
@@ -141,6 +141,9 @@ export function traceSamples(points: Point[]): Point[] {
 }
 export const WALK_PREFERENCES = {
   walking_speed: 4.8,
+  walkway_factor: 0.65,
+  sidewalk_factor: 0.8,
+  alley_factor: 5,
   service_penalty: 90,
   service_factor: 2.5,
   driveway_factor: 8,
@@ -200,6 +203,7 @@ export async function walkingRoute(
 async function requestWalkingRoute(
   points: Point[],
   signal: AbortSignal,
+  guidance = false,
 ): Promise<Walk> {
   const delay = Math.max(0, 1100 - (Date.now() - lastRequest));
   if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay));
@@ -209,10 +213,13 @@ async function requestWalkingRoute(
     process.env.NEXT_PUBLIC_ROUTING_URL ||
     'https://valhalla1.openstreetmap.de/route';
   const request = {
-    locations: points.map(([lat, lon]) => ({
+    locations: points.map(([lat, lon], i) => ({
       lat,
       lon,
-      type: 'break',
+      type: guidance && i > 0 && i < points.length - 1 ? 'through' : 'break',
+      ...(guidance && i > 0 && i < points.length - 1
+        ? { radius: 100, rank_candidates: false }
+        : {}),
       search_cutoff: 500,
     })),
     costing: 'pedestrian',
@@ -281,7 +288,7 @@ export async function sketchRoute(
       shape_match: 'map_snap',
       costing: 'pedestrian',
       units: 'kilometers',
-      trace_options: { gps_accuracy: 50, search_radius: 100 },
+      trace_options: { gps_accuracy: 80, search_radius: 100 },
       costing_options: { pedestrian: WALK_PREFERENCES },
     }),
     signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
@@ -300,17 +307,44 @@ export async function sketchRoute(
       summary: { length: number; time: number };
     };
   };
-  if (
-    data.trip?.status !== 0 ||
-    !data.trip.legs?.length ||
-    data.alternates?.length
-  )
+  if (data.alternates?.length) {
+    // A loose contour is not a GPS recording. If matching fragments it,
+    // route through a few broad turns instead, with no intermediate U-turns.
+    const anchors = sampleSketch(sketch, 8);
+    const route = await requestWalkingRoute(anchors, signal, true);
+    if (
+      route.meters > sketchLength(shape) * 2 + 400 ||
+      distance(route.points[0], shape[0]) > 150 ||
+      distance(route.points.at(-1)!, shape.at(-1)!) > 150
+    )
+      throw new Error(
+        'Для цього контуру виходить надто великий обхід. Уточніть основні повороти.',
+      );
+    if (distance(start, route.points[0]) <= 15) return route;
+    const connector = await walkingRoute([start, route.points[0]], signal);
+    if (distance(connector.points.at(-1)!, route.points[0]) > 5)
+      throw new Error(
+        'Не вдалося з’єднати старт із контуром. Почніть лінію ближче до старту.',
+      );
+    return {
+      points: [...connector.points, ...route.points],
+      meters: connector.meters + route.meters,
+      seconds: connector.seconds + route.seconds,
+    };
+  }
+  if (data.trip?.status !== 0 || !data.trip.legs?.length)
     throw new Error(
       'Лінія перетинає непрохідну ділянку. Скоригуйте малюнок — неповний маршрут не показуємо.',
     );
-  const points = data.trip.legs.flatMap((leg) => decodePolyline(leg.shape)),
-    meters = data.trip.summary.length * 1000,
-    seconds = data.trip.summary.time;
+  const matched = cleanSketchSpurs(
+    {
+      points: data.trip.legs.flatMap((leg) => decodePolyline(leg.shape)),
+      meters: data.trip.summary.length * 1000,
+      seconds: data.trip.summary.time,
+    },
+    shape,
+  );
+  const { points, meters, seconds } = matched;
   if (
     points.length < 2 ||
     !Number.isFinite(meters) ||
@@ -342,4 +376,37 @@ export async function sketchRoute(
     };
   }
   return { points, meters, seconds };
+}
+
+// Remove only short, exactly retraced internal branches. Never connect nearby
+// streets across a wall, remove a real loop, or modify explicitly placed stops.
+export function cleanSketchSpurs(walk: Walk, sketch: Point[]): Walk {
+  const points = walk.points.filter(
+    (p, i, all) => !i || distance(all[i - 1], p) > 0,
+  );
+  let removed = 0;
+  for (let i = 1; i < points.length - 2; i++) {
+    let length = 0;
+    for (let j = i + 1; j < points.length - 1; j++) {
+      length += distance(points[j - 1], points[j]);
+      if (length > 350) break;
+      if (points[i][0] !== points[j][0] || points[i][1] !== points[j][1])
+        continue;
+      const branch = points.slice(i, j + 1);
+      const symmetric = branch.every(
+        (p, k) => distance(p, branch[branch.length - 1 - k]) < 0.2,
+      );
+      const tip = branch[Math.floor(branch.length / 2)];
+      // Preserve a deliberate excursion drawn toward its turning point.
+      if (!symmetric || sketch.some((p) => distance(p, tip) < 35)) break;
+      points.splice(i + 1, j - i);
+      removed += length;
+      i--;
+      break;
+    }
+  }
+  if (!removed) return walk;
+  const originalLength = sketchLength(walk.points);
+  const ratio = Math.max(0, (originalLength - removed) / originalLength);
+  return { points, meters: walk.meters * ratio, seconds: walk.seconds * ratio };
 }

@@ -1339,3 +1339,16 @@ h1 span {
 .settings-dialog[data-slot] {
   z-index: 1100;
 }
+@keyframes route-forward {
+  to {
+    stroke-dashoffset: -26;
+  }
+}
+.route-flow {
+  animation: route-forward 1.6s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-flow {
+    animation: none;
+  }
+}
