@@ -13,6 +13,8 @@ import {
   decodePolyline,
   sampleSketch,
   walkingRoute,
+  sketchRoute,
+  traceSamples,
   type Point,
 } from '../lib/route.ts';
 void test('personal stride changes step estimate and rejects invalid inputs', () => {
@@ -166,9 +168,72 @@ void test('long sketch retains endpoints within waypoint budget', () => {
     30 + Math.sin(i / 20) * 0.01,
   ]);
   const sampled = sampleSketch(points);
-  assert.equal(sampled.length, 18);
+  assert.ok(sampled.length > 2 && sampled.length < points.length);
   assert.deepEqual(sampled[0], points[0]);
   assert.deepEqual(sampled.at(-1), points.at(-1));
+});
+void test('short noisy straight sketch has two bends rather than 18 compulsory stops', () => {
+  const points: Point[] = Array.from({ length: 80 }, (_, i) => [
+    50 + i * 0.00001,
+    30 + (i % 2) * 0.00002,
+  ]);
+  assert.equal(sampleSketch(points).length, 2);
+  assert.ok(traceSamples(points).length < 10);
+  const corner: Point[] = [
+    [50, 30],
+    [50.002, 30],
+    [50.002, 30.002],
+  ];
+  assert.deepEqual(sampleSketch(corner), corner);
+});
+void test('sketch uses whole-line map matching and rejects disconnected partial results', async () => {
+  const original = globalThis.fetch;
+  const shape: Point[] = [
+    [50, 30],
+    [50.001, 30],
+    [50.002, 30],
+  ];
+  let partial = false;
+  try {
+    globalThis.fetch = async (url, init) => {
+      assert.ok(typeof url === 'string' && url.endsWith('/trace_route'));
+      assert.equal(init?.method, 'POST');
+      const body = JSON.parse(
+        typeof init?.body === 'string' ? init.body : '',
+      ) as {
+        shape_match: string;
+        locations?: unknown;
+        shape: { type?: string }[];
+        costing_options: { pedestrian: { service_factor: number } };
+      };
+      assert.equal(body.shape_match, 'map_snap');
+      assert.equal(body.locations, undefined);
+      assert.ok(body.shape.every((p) => p.type === undefined));
+      assert.ok(body.costing_options.pedestrian.service_factor > 1);
+      return new Response(
+        JSON.stringify({
+          trip: {
+            status: 0,
+            legs: [{ shape: encode(shape) }],
+            summary: { length: 0.24, time: 180 },
+          },
+          ...(partial ? { alternates: [{}] } : {}),
+        }),
+      );
+    };
+    const walk = await sketchRoute(
+      shape[0],
+      shape,
+      new AbortController().signal,
+    );
+    assert.equal(walk.meters, 240);
+    partial = true;
+    await assert.rejects(
+      sketchRoute(shape[0], shape, new AbortController().signal),
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 void test('routing requests walking profile; no straight-line fallback on service failure', async () => {
   const original = globalThis.fetch;

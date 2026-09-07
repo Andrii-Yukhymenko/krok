@@ -33,11 +33,13 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import WalkMap from './walk-map';
+import PlannerPanel from './planner-panel';
+import { scenicWalk, type Place } from '@/lib/places';
 import {
   DEFAULT_START,
   destination,
-  distance,
   sampleSketch,
+  sketchRoute,
   stepsFor,
   walkingRoute,
   withReturn,
@@ -55,6 +57,11 @@ const coords = (p: Point) => p.map((n) => n.toFixed(4)).join(', ');
 const today = () => new Date().toLocaleDateString('en-CA');
 
 export default function Planner() {
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [sketch, setSketch] = useState<Point[]>([]);
+  const [ideaStyle, setIdeaStyle] = useState('scenic');
+  const [routePlaces, setRoutePlaces] = useState<Place[]>([]);
+  const ideaVariation = useRef(0);
   const [mode, setMode] = useState<Mode>('point'),
     [start, setStart] = useState<Point | null>(null),
     [startLabel, setStartLabel] = useState('Старт ще не обрано'),
@@ -148,6 +155,7 @@ export default function Planner() {
     setBusy(false);
     setWalk(null);
     setMessage('');
+    setRoutePlaces([]);
   }
   function chooseStart(p: Point, label = 'Обрана точка') {
     gpsVersion.current++;
@@ -158,6 +166,8 @@ export default function Planner() {
     setPickingStart(false);
     setDrawing(false);
     setPoints([]);
+    setSketch([]);
+    setPanelOpen(false);
   }
   function gps() {
     if (!navigator.geolocation) {
@@ -186,11 +196,12 @@ export default function Planner() {
   function changeMode(value: unknown) {
     invalidate();
     setMode(value as Mode);
+    setSketch([]);
     setPoints([]);
     setDrawing(false);
     setPickingStart(false);
   }
-  async function build(input = points, origin = start) {
+  async function build(input = points, origin = start, trace = sketch) {
     if (!origin) {
       setMessage('Спочатку оберіть старт.');
       return;
@@ -206,8 +217,12 @@ export default function Planner() {
     setWalk(null);
     setMessage('');
     setDrawing(false);
+    setPanelOpen(false);
     try {
-      const result = await walkingRoute([origin, ...input], abort.signal);
+      const result =
+        mode === 'draw'
+          ? await sketchRoute(origin, trace, abort.signal)
+          : await walkingRoute([origin, ...input], abort.signal);
       if (!abort.signal.aborted) setWalk(result);
     } catch (e) {
       if (!abort.signal.aborted)
@@ -227,10 +242,7 @@ export default function Planner() {
       setMessage('Натисніть «Запропонувати прогулянку».');
       return;
     }
-    if (mode === 'draw') {
-      setMessage('Увімкніть «Малювати» або оберіть режим «Точки».');
-      return;
-    }
+    if (mode === 'draw') return;
     invalidate();
     const next = mode === 'point' ? [p] : [...points, p];
     if (next.length > 18) {
@@ -261,7 +273,27 @@ export default function Planner() {
     let radius = target / 6,
       best: Walk | null = null,
       bestPoints: Point[] = [];
+    setPanelOpen(false);
+    setRoutePlaces([]);
     try {
+      if (ideaStyle === 'scenic') {
+        const result = await scenicWalk(
+          start,
+          target,
+          abort.signal,
+          ideaVariation.current++,
+        );
+        if (!abort.signal.aborted) {
+          setWalk(result.walk);
+          setRoutePlaces(result.places);
+          setPoints([...result.places.map((p) => p.point), start]);
+          if (Math.abs(result.walk.meters - target) / target > 0.1)
+            setMessage(
+              'Знайдено прогулянку через цікаві місця. Перевірте різницю з ціллю — точна довжина залежить від доріг.',
+            );
+        }
+        return;
+      }
       for (let attempt = 0; attempt < 3; attempt++) {
         abort.signal.throwIfAborted();
         const candidates = [
@@ -353,7 +385,7 @@ export default function Planner() {
         </div>
       </header>
       <div className="workspace">
-        <aside className="planner-panel">
+        <PlannerPanel open={panelOpen} onOpenChange={setPanelOpen}>
           <div className="panel-heading">
             <div>
               <p className="eyebrow">ВАША ЩОДЕННА ПРОГУЛЯНКА</p>
@@ -429,6 +461,7 @@ export default function Planner() {
                 setGpsBusy(false);
                 setPickingStart(!pickingStart);
                 setDrawing(false);
+                setPanelOpen(false);
               }}
             >
               <MapPin size={16} />
@@ -476,15 +509,30 @@ export default function Planner() {
                 Поставте кілька точок. Пройдемо їх у тому порядку, як ви обрали.
               </TabsContent>
               <TabsContent value="draw">
-                Проведіть лінію, підтвердьте — підлаштуємо її під дороги й
-                стежки.
+                Проведіть лінію — маршрут побудується автоматично. Це напрямок
+                прогулянки, а не обов’язкові зупинки.
               </TabsContent>
               <TabsContent value="auto">
-                Запропонуємо маршрут із поверненням на старт, близький до вашої
-                цілі.
+                Знайдемо парки, сквери й пішохідні місця поруч та з’єднаємо їх у
+                прогулянку з поверненням.
               </TabsContent>
             </div>
           </Tabs>
+          {mode === 'auto' && (
+            <Tabs
+              value={ideaStyle}
+              onValueChange={(v) => {
+                setIdeaStyle(String(v));
+                invalidate();
+                ideaVariation.current = 0;
+              }}
+            >
+              <TabsList className="idea-tabs">
+                <TabsTrigger value="scenic">Парки й цікаві місця</TabsTrigger>
+                <TabsTrigger value="random">Випадкова</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          )}
           {mode !== 'auto' && (
             <label className="return-option" htmlFor="return-switch">
               <span>
@@ -508,6 +556,7 @@ export default function Planner() {
               onClick={() => {
                 setDrawing(!drawing);
                 setPickingStart(false);
+                setPanelOpen(false);
               }}
             >
               <Pencil size={16} />
@@ -525,6 +574,7 @@ export default function Planner() {
                 onClick={() => {
                   invalidate();
                   setPoints(mode === 'draw' ? [] : points.slice(0, -1));
+                  if (mode === 'draw') setSketch([]);
                 }}
               >
                 <Undo2 size={17} />
@@ -534,6 +584,7 @@ export default function Planner() {
                 onClick={() => {
                   invalidate();
                   setPoints([]);
+                  setSketch([]);
                   setDrawing(false);
                 }}
               >
@@ -541,28 +592,32 @@ export default function Planner() {
               </button>
             </div>
           )}
-          <button
-            className="primary-button"
-            disabled={
-              busy || !online || !start || (mode !== 'auto' && !points.length)
-            }
-            onClick={() => (mode === 'auto' ? void suggest() : void build())}
-          >
-            {busy ? (
-              <>
-                <span className="spinner" /> Шукаємо пішохідний шлях…
-              </>
-            ) : (
-              <>
-                {mode === 'auto'
-                  ? walk
-                    ? 'Інша прогулянка'
-                    : 'Запропонувати прогулянку'
-                  : 'Побудувати маршрут'}
-                <ArrowRight size={19} />
-              </>
-            )}
-          </button>
+          {(mode !== 'draw' || (points.length > 0 && !walk && !busy)) && (
+            <button
+              className="primary-button"
+              disabled={
+                busy || !online || !start || (mode !== 'auto' && !points.length)
+              }
+              onClick={() => (mode === 'auto' ? void suggest() : void build())}
+            >
+              {busy ? (
+                <>
+                  <span className="spinner" /> Шукаємо пішохідний шлях…
+                </>
+              ) : (
+                <>
+                  {mode === 'auto'
+                    ? walk
+                      ? 'Інша прогулянка'
+                      : 'Запропонувати прогулянку'
+                    : mode === 'draw'
+                      ? 'Повторити побудову'
+                      : 'Побудувати маршрут'}
+                  <ArrowRight size={19} />
+                </>
+              )}
+            </button>
+          )}
           {busy && (
             <button className="text-button" onClick={invalidate}>
               Скасувати пошук
@@ -605,6 +660,21 @@ export default function Planner() {
                     {Math.round(shownWalk.seconds / 60)} хв
                   </span>
                 </div>
+                {routePlaces.length > 0 && (
+                  <div className="route-places">
+                    {routePlaces.map((place) => (
+                      <a
+                        key={place.id}
+                        href={'https://www.openstreetmap.org/' + place.id}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <span>{place.kind}</span>
+                        <strong>{place.name}</strong>
+                      </a>
+                    ))}
+                  </div>
+                )}
                 <p className="goal-comparison">
                   {Math.abs(remaining - steps) < 100
                     ? 'Майже точно під вашу ціль'
@@ -631,7 +701,7 @@ export default function Planner() {
             Оцінка за довжиною кроку {stride} см. Це планувальник, а не
             лічильник руху.
           </p>
-        </aside>
+        </PlannerPanel>
         <div className="map-area">
           <WalkMap
             start={start}
@@ -640,21 +710,65 @@ export default function Planner() {
             drawing={drawing}
             pickingStart={pickingStart}
             busy={busy}
+            mode={mode}
+            sketch={sketch}
+            onToggleDrawing={() => {
+              setDrawing(!drawing);
+              setPickingStart(false);
+            }}
+            onNewSketch={() => {
+              invalidate();
+              setSketch([]);
+              setPoints([]);
+              setDrawing(true);
+            }}
             onConfirmStart={(p) => chooseStart(p)}
             onPoint={onPoint}
-            onSketch={(p) => {
+            onSketch={(stroke) => {
+              const complete = [...sketch, ...stroke];
+              const simplified = sampleSketch(complete);
               invalidate();
-              const sampled = sampleSketch(p);
-              setPoints(
-                start && distance(start, sampled[0]) < 20
-                  ? sampled.slice(1)
-                  : sampled,
-              );
+              setSketch(complete);
+              setPoints(simplified);
               setDrawing(false);
+              void build(simplified, start, complete);
             }}
             onGps={gps}
             onError={setMessage}
           />
+          <div className="mobile-map-dock">
+            <div className="mobile-route-summary" aria-live="polite">
+              <strong>
+                {busy
+                  ? 'Будуємо маршрут…'
+                  : shownWalk
+                    ? `≈ ${fmt(steps)} кроків`
+                    : `До цілі: ${fmt(remaining)} кроків`}
+              </strong>
+              <span>
+                {shownWalk
+                  ? `${(shownWalk.meters / 1000).toLocaleString('uk-UA', { maximumFractionDigits: 2 })} км · ${Math.round(shownWalk.seconds / 60)} хв`
+                  : 'Оберіть старт і спосіб прогулянки'}
+              </span>
+            </div>
+            <button
+              className="primary-button"
+              onClick={() => setPanelOpen(true)}
+            >
+              <Settings2 size={18} />
+              Маршрут
+            </button>
+            {(!online || message) && (
+              <output className="mobile-notice" aria-live="polite">
+                {!online ? 'Ви офлайн. Потрібен інтернет.' : message}
+              </output>
+            )}
+            {busy && (
+              <button className="text-button" onClick={invalidate}>
+                Скасувати пошук
+              </button>
+            )}
+          </div>
           <div className="map-bottom-tip">
             <span className="tip-icon">
               {mode === 'draw' ? <Pencil size={20} /> : <MapPin size={20} />}
@@ -776,8 +890,9 @@ export default function Planner() {
             потребують інтернету.
           </p>
           <p className="muted">
-            Точки маршруту надсилаються сервісу Valhalla, а ділянки карти
-            завантажуються з OpenStreetMap. Координати не зберігаються в
+            Точки та ескіз маршруту надсилаються сервісу Valhalla. Для пошуку
+            парків координати старту надсилаються Overpass API; карта
+            завантажується з OpenStreetMap. Координати не зберігаються в
             налаштуваннях.
           </p>
         </DialogContent>

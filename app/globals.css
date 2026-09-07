@@ -1077,3 +1077,265 @@ h1 span {
     0 0 3px white,
     0 0 5px white;
 }
+/* Map-first mobile workspace and focused planning sheet. */
+.mobile-map-dock {
+  display: none;
+}
+.mobile-planner-sheet[data-slot] {
+  max-height: 88dvh;
+  border-radius: 24px 24px 0 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  gap: 0;
+  padding: 16px 0 env(safe-area-inset-bottom);
+  z-index: 900;
+}
+.mobile-planner-sheet .planner-panel {
+  margin: 0;
+  padding-top: 16px;
+  border-radius: 0;
+}
+.sheet-grip {
+  width: 40px;
+  height: 4px;
+  background: #ced9d1;
+  border-radius: 8px;
+  margin: 0 auto;
+  flex-shrink: 0;
+}
+.idea-tabs[data-slot] {
+  width: 100%;
+  height: 42px;
+  margin: 0 0 14px;
+  background: #eef4ea;
+}
+.idea-tabs [data-slot='tabs-trigger'] {
+  font-size: 12px;
+  padding: 8px;
+}
+.route-places {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+.route-places a {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-decoration: none;
+  padding: 9px;
+  background: #f1f6ec;
+  border-radius: 8px;
+}
+.route-places span {
+  font-size: 11px;
+  color: #667e5b;
+}
+.route-places strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+.map-draw-tools {
+  position: absolute;
+  z-index: 6;
+  left: 50%;
+  top: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 5px;
+  padding: 5px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 3px 15px #16332120;
+}
+.map-draw-tools button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  background: #eef3e9;
+  border-radius: 8px;
+  min-height: 40px;
+  padding: 9px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.map-draw-tools button.active {
+  background: #163e32;
+  color: white;
+}
+.leaflet-marker-icon.map-pin-icon {
+  background: none;
+  border: 0;
+  padding: 0;
+  line-height: 1;
+  font-family: Arial, Helvetica, sans-serif;
+}
+.krok-waypoint {
+  box-sizing: border-box;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 3px solid white;
+  border-radius: 50%;
+  background: #163e32;
+  color: white;
+  box-shadow: 0 2px 7px #123a3240;
+}
+.krok-waypoint span {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  margin: 0;
+  padding: 0;
+}
+.krok-start {
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: white;
+  border: 3px solid white;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 6px #31876625,
+    0 2px 7px #163c3230;
+}
+.krok-start span {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #258564;
+  flex: none;
+}
+@media (max-width: 1100px) {
+  .map-draw-tools {
+    top: 74px;
+    left: 20px;
+    transform: none;
+  }
+}
+@media (max-width: 700px) {
+  .app-shell {
+    height: 100dvh;
+    overflow: hidden;
+  }
+  .workspace {
+    height: calc(100dvh - 65px);
+    min-height: 0;
+    display: block;
+  }
+  .workspace > .planner-panel {
+    display: none;
+  }
+  .map-area {
+    height: 100%;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+  }
+  .mobile-map-dock {
+    display: grid;
+    position: absolute;
+    bottom: calc(25px + env(safe-area-inset-bottom));
+    left: 12px;
+    right: 12px;
+    z-index: 8;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 12px;
+    background: #fffffff5;
+    border: 1px solid #dce5df;
+    border-radius: 16px;
+    box-shadow: 0 4px 25px #163c3220;
+  }
+  .mobile-route-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  .mobile-route-summary strong {
+    font-size: 16px;
+  }
+  .mobile-route-summary span {
+    font-size: 12px;
+    color: #667a6c;
+  }
+  .mobile-map-dock > .primary-button {
+    width: auto;
+    min-height: 44px;
+    padding: 12px;
+    font-size: 13px;
+  }
+  .mobile-notice {
+    grid-column: 1/-1;
+    font-size: 12px;
+    line-height: 1.4;
+    color: #795922;
+    background: #fff6df;
+    padding: 8px;
+    border-radius: 8px;
+    max-height: 90px;
+    overflow: auto;
+  }
+  .mobile-map-dock > .text-button {
+    grid-column: 1/-1;
+    margin: 0;
+  }
+  .leaflet-control-attribution {
+    margin-bottom: 0 !important;
+    max-width: 100%;
+  }
+  .map-draw-tools {
+    top: 65px;
+    left: 12px;
+    right: 72px;
+    transform: none;
+    width: max-content;
+    max-width: calc(100% - 84px);
+  }
+  .map-draw-tools button {
+    font-size: 12px;
+    padding: 8px;
+  }
+  .map-instruction {
+    top: 123px;
+    width: calc(100% - 100px);
+    left: 12px;
+    transform: none;
+    font-size: 12px;
+  }
+  .map-center-button {
+    top: auto;
+    bottom: 145px;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+  .map-label {
+    top: 13px;
+    left: 12px;
+  }
+  .map-controls {
+    right: 12px;
+    top: 13px;
+  }
+  .settings-dialog[data-slot] {
+    z-index: 1100;
+  }
+}
+[data-slot='dialog-overlay'] {
+  z-index: 1050;
+}
+.settings-dialog[data-slot] {
+  z-index: 1100;
+}

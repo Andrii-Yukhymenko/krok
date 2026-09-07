@@ -67,24 +67,86 @@ export function decodePolyline(encoded: string): Point[] {
   }
   return out;
 }
-// Sample by travelled distance, retaining deliberate backtracking.
-export function sampleSketch(points: Point[], maxPoints = 18): Point[] {
-  if (points.length <= maxPoints) return points;
-  const accumulated = [0];
-  for (let i = 1; i < points.length; i++)
-    accumulated.push(accumulated[i - 1] + distance(points[i - 1], points[i]));
-  const total = accumulated.at(-1)!;
-  if (total === 0) return [points[0]];
-  const result: Point[] = [points[0]];
-  let cursor = 1;
-  for (let j = 1; j < maxPoints - 1; j++) {
-    const target = (total * j) / (maxPoints - 1);
-    while (cursor < points.length - 1 && accumulated[cursor] < target) cursor++;
-    result.push(points[cursor]);
+// Ramer–Douglas–Peucker in metres: keep meaningful bends, discard hand jitter.
+export function sampleSketch(points: Point[], maxPoints = 200): Point[] {
+  const clean: Point[] = [];
+  points.forEach((p, i) => {
+    if (
+      !clean.length ||
+      distance(clean.at(-1)!, p) > 2 ||
+      (i === points.length - 1 && distance(clean.at(-1)!, p) > 0)
+    )
+      clean.push(p);
+  });
+  if (clean.length < 3) return clean;
+  const simplify = (input: Point[], tolerance: number): Point[] => {
+    if (input.length < 3) return input;
+    const a = input[0],
+      b = input.at(-1)!,
+      scale = Math.cos((a[0] * Math.PI) / 180);
+    const xy = (p: Point) => [
+      (p[1] - a[1]) * 111195 * scale,
+      (p[0] - a[0]) * 111195,
+    ];
+    const [bx, by] = xy(b),
+      length = bx * bx + by * by;
+    let furthest = 0,
+      index = 0;
+    for (let i = 1; i < input.length - 1; i++) {
+      const [x, y] = xy(input[i]);
+      const t = length
+        ? Math.max(0, Math.min(1, (x * bx + y * by) / length))
+        : 0;
+      const d = Math.hypot(x - t * bx, y - t * by);
+      if (d > furthest) {
+        furthest = d;
+        index = i;
+      }
+    }
+    if (furthest <= tolerance) return [a, b];
+    return [
+      ...simplify(input.slice(0, index + 1), tolerance).slice(0, -1),
+      ...simplify(input.slice(index), tolerance),
+    ];
+  };
+  let tolerance = 25,
+    result = simplify(clean, tolerance);
+  while (result.length > maxPoints) {
+    tolerance *= 1.5;
+    result = simplify(clean, tolerance);
   }
-  result.push(points.at(-1)!);
   return result;
 }
+export function sketchLength(points: Point[]): number {
+  return points.slice(1).reduce((sum, p, i) => sum + distance(points[i], p), 0);
+}
+export function traceSamples(points: Point[]): Point[] {
+  const simplified = sampleSketch(points),
+    length = sketchLength(simplified);
+  const spacing = Math.max(60, length / 350),
+    out: Point[] = [];
+  simplified.forEach((p, i) => {
+    if (i) {
+      const a = simplified[i - 1],
+        count = Math.ceil(distance(a, p) / spacing);
+      for (let j = 1; j < count; j++)
+        out.push([
+          a[0] + ((p[0] - a[0]) * j) / count,
+          a[1] + ((p[1] - a[1]) * j) / count,
+        ]);
+    }
+    out.push(p);
+  });
+  return out;
+}
+export const WALK_PREFERENCES = {
+  walking_speed: 4.8,
+  service_penalty: 90,
+  service_factor: 2.5,
+  driveway_factor: 8,
+  use_living_streets: 0.15,
+  use_ferry: 0,
+};
 export function withReturn(walk: Walk): Walk {
   return {
     meters: walk.meters * 2,
@@ -156,7 +218,7 @@ async function requestWalkingRoute(
     costing: 'pedestrian',
     units: 'kilometers',
     directions_options: { units: 'kilometers' },
-    costing_options: { pedestrian: { walking_speed: 4.8 } },
+    costing_options: { pedestrian: WALK_PREFERENCES },
   };
   const response = await fetch(
     endpoint + '?json=' + encodeURIComponent(JSON.stringify(request)),
@@ -190,4 +252,94 @@ async function requestWalkingRoute(
   )
     throw new Error('Сервіс повернув некоректний маршрут.');
   return { points: geometry, meters, seconds };
+}
+
+// Treat the sketch as noisy guidance, never as compulsory intermediate stops.
+export async function sketchRoute(
+  start: Point,
+  sketch: Point[],
+  signal: AbortSignal,
+): Promise<Walk> {
+  const shape = traceSamples(sketch);
+  if (shape.length < 2 || sketchLength(shape) < 25)
+    throw new Error('Намалюйте маршрут довжиною хоча б 25 метрів.');
+  if (sketchLength(shape) > 50000)
+    throw new Error('Розділіть малюнок на прогулянки до 50 км.');
+  const delay = Math.max(0, 1100 - (Date.now() - lastRequest));
+  if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay));
+  signal.throwIfAborted();
+  lastRequest = Date.now();
+  const endpoint = (
+    process.env.NEXT_PUBLIC_ROUTING_URL ||
+    'https://valhalla1.openstreetmap.de/route'
+  ).replace(/\/route\/?$/, '/trace_route');
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      shape: shape.map(([lat, lon]) => ({ lat, lon })),
+      shape_match: 'map_snap',
+      costing: 'pedestrian',
+      units: 'kilometers',
+      trace_options: { gps_accuracy: 50, search_radius: 100 },
+      costing_options: { pedestrian: WALK_PREFERENCES },
+    }),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
+  });
+  if (!response.ok)
+    throw new Error(
+      response.status === 429
+        ? 'Сервіс зайнятий. Зачекайте й повторіть побудову.'
+        : 'Не вдалося зіставити малюнок із доріжками. Спробуйте провести лінію ближче до них.',
+    );
+  const data = (await response.json()) as {
+    alternates?: unknown[];
+    trip?: {
+      status: number;
+      legs: { shape: string }[];
+      summary: { length: number; time: number };
+    };
+  };
+  if (
+    data.trip?.status !== 0 ||
+    !data.trip.legs?.length ||
+    data.alternates?.length
+  )
+    throw new Error(
+      'Лінія перетинає непрохідну ділянку. Скоригуйте малюнок — неповний маршрут не показуємо.',
+    );
+  const points = data.trip.legs.flatMap((leg) => decodePolyline(leg.shape)),
+    meters = data.trip.summary.length * 1000,
+    seconds = data.trip.summary.time;
+  if (
+    points.length < 2 ||
+    !Number.isFinite(meters) ||
+    meters <= 0 ||
+    !Number.isFinite(seconds)
+  )
+    throw new Error('Сервіс повернув некоректний маршрут.');
+  if (
+    distance(points[0], shape[0]) > 150 ||
+    distance(points.at(-1)!, shape.at(-1)!) > 150
+  )
+    throw new Error(
+      'Не вдалося знайти початок або кінець лінії на доріжках. Перемістіть їх ближче до проходу.',
+    );
+  if (meters > sketchLength(shape) * 2 + 400)
+    throw new Error(
+      'За цим малюнком виходить великий обхід. Спробуйте обвести перешкоду або змінити лінію.',
+    );
+  if (distance(start, points[0]) > 15) {
+    const connector = await walkingRoute([start, points[0]], signal);
+    if (distance(connector.points.at(-1)!, points[0]) > 5)
+      throw new Error(
+        'Не вдалося з’єднати старт із малюнком. Почніть лінію ближче до старту.',
+      );
+    return {
+      points: [...connector.points, ...points],
+      meters: connector.meters + meters,
+      seconds: connector.seconds + seconds,
+    };
+  }
+  return { points, meters, seconds };
 }

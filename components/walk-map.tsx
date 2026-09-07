@@ -1,7 +1,16 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import type * as Leaflet from 'leaflet';
-import { LocateFixed, Plus, Minus, Scan, MapPin } from 'lucide-react';
+import {
+  LocateFixed,
+  Plus,
+  Minus,
+  Scan,
+  MapPin,
+  Pencil,
+  Hand,
+  RotateCcw,
+} from 'lucide-react';
 import { DEFAULT_START, distance, type Point, type Walk } from '@/lib/route';
 
 type Props = {
@@ -11,6 +20,10 @@ type Props = {
   drawing: boolean;
   pickingStart: boolean;
   busy: boolean;
+  mode: string;
+  sketch: Point[];
+  onToggleDrawing: () => void;
+  onNewSketch: () => void;
   onConfirmStart: (p: Point) => void;
   onPoint: (p: Point) => void;
   onSketch: (p: Point[]) => void;
@@ -91,17 +104,20 @@ export default function WalkMap(props: Props) {
         lineJoin: 'round',
       }).addTo(group);
     } else if (props.points.length && props.start)
-      L.polyline([props.start, ...props.points], {
-        color: '#19785c',
-        weight: 3,
-        dashArray: '7 9',
-        opacity: 0.7,
-      }).addTo(group);
+      L.polyline(
+        props.mode === 'draw' ? props.sketch : [props.start, ...props.points],
+        {
+          color: '#19785c',
+          weight: 3,
+          dashArray: '7 9',
+          opacity: 0.7,
+        },
+      ).addTo(group);
     if (props.start)
       L.marker(props.start, {
         icon: L.divIcon({
-          className: 'start-marker',
-          html: '<span></span>',
+          className: 'map-pin-icon',
+          html: '<div class="krok-start"><span></span></div>',
           iconSize: [28, 28],
           iconAnchor: [14, 14],
         }),
@@ -109,37 +125,49 @@ export default function WalkMap(props: Props) {
       })
         .bindTooltip('Старт')
         .addTo(group);
-    props.points.forEach((p, i) =>
+    const markers =
+      props.mode === 'draw'
+        ? props.walk
+          ? [props.walk.points.at(-1)!]
+          : []
+        : props.points;
+    markers.forEach((p, i) => {
+      if (props.start && distance(props.start, p) < 15) return;
       L.marker(p, {
         icon: L.divIcon({
-          className: 'waypoint-marker',
-          html: String(i + 1),
-          iconSize: [26, 26],
-          iconAnchor: [13, 13],
+          className: 'map-pin-icon',
+          html:
+            '<div class="krok-waypoint"><span>' +
+            (props.mode === 'draw' ? 'Ф' : String(i + 1)) +
+            '</span></div>',
+          iconSize: [30, 30],
+          iconAnchor: [15, 15],
         }),
         keyboard: false,
+        zIndexOffset: 100,
       })
-        .bindTooltip('Точка ' + (i + 1))
-        .addTo(group),
+        .bindTooltip(props.mode === 'draw' ? 'Фініш' : 'Точка ' + (i + 1))
+        .addTo(group);
+    });
+  }, [ready, props.start, props.points, props.walk, props.mode, props.sketch]);
+  useEffect(() => {
+    if (!ready || !container.current) return;
+    const observer = new ResizeObserver(() =>
+      map.current?.invalidateSize({ pan: false }),
     );
-  }, [ready, props.start, props.points, props.walk]);
+    observer.observe(container.current);
+    return () => observer.disconnect();
+  }, [ready]);
   useEffect(() => {
     if (ready && props.start) map.current?.setView(props.start, 15);
   }, [ready, props.start]);
   useEffect(() => {
-    if (
-      (props.pickingStart || props.drawing) &&
-      window.matchMedia('(max-width:700px)').matches
-    )
-      container.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [props.pickingStart, props.drawing]);
-  useEffect(() => {
-    if (ready && props.walk)
+    if (ready && props.walk && props.mode !== 'draw')
       map.current?.fitBounds(props.walk.points, {
         padding: [50, 60],
         maxZoom: 16,
       });
-  }, [ready, props.walk]);
+  }, [ready, props.walk, props.mode]);
   useEffect(() => {
     const m = map.current,
       el = container.current,
@@ -153,16 +181,53 @@ export default function WalkMap(props: Props) {
     }
     m.dragging.disable();
     m.doubleClickZoom.disable();
-    m.touchZoom.disable();
+    m.touchZoom.enable();
     let points: Point[] = [],
       line: Leaflet.Polyline | null = null,
       active: number | null = null;
+    const fingers = new Set<number>();
+    let pinching = false,
+      panning = false;
+    const keydown = (event: KeyboardEvent) => {
+      if (
+        event.code !== 'Space' ||
+        active !== null ||
+        (event.target instanceof HTMLElement &&
+          event.target.closest('input,textarea,button,[contenteditable]'))
+      )
+        return;
+      event.preventDefault();
+      panning = true;
+      m.dragging.enable();
+      el.style.cursor = 'grab';
+    };
+    const keyup = (event: KeyboardEvent) => {
+      if (event.code !== 'Space' || !panning) return;
+      panning = false;
+      m.dragging.disable();
+      el.style.cursor = '';
+    };
+    const blur = () => {
+      panning = false;
+      m.dragging.disable();
+      el.style.cursor = '';
+    };
     const point = (e: PointerEvent): Point => {
       const ll = m.mouseEventToLatLng(e);
       return [ll.lat, ll.lng];
     };
     const down = (e: PointerEvent) => {
-      if (active !== null || e.button !== 0) return;
+      if (e.pointerType === 'touch') {
+        fingers.add(e.pointerId);
+        if (fingers.size > 1) {
+          pinching = true;
+          active = null;
+          line?.remove();
+          points = [];
+          return;
+        }
+      }
+      if (panning || pinching || active !== null || e.button !== 0) return;
       e.preventDefault();
       active = e.pointerId;
       el.setPointerCapture(e.pointerId);
@@ -174,7 +239,7 @@ export default function WalkMap(props: Props) {
       }).addTo(m);
     };
     const move = (e: PointerEvent) => {
-      if (active !== e.pointerId) return;
+      if (pinching || active !== e.pointerId) return;
       e.preventDefault();
       const p = point(e);
       if (distance(points.at(-1)!, p) > 8) {
@@ -183,6 +248,11 @@ export default function WalkMap(props: Props) {
       }
     };
     const finish = (e: PointerEvent) => {
+      fingers.delete(e.pointerId);
+      if (pinching) {
+        if (fingers.size === 0) pinching = false;
+        return;
+      }
       if (active !== e.pointerId) return;
       active = null;
       line?.remove();
@@ -198,12 +268,19 @@ export default function WalkMap(props: Props) {
     el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', finish);
     el.addEventListener('pointercancel', finish);
+    window.addEventListener('keydown', keydown);
+    window.addEventListener('keyup', keyup);
+    window.addEventListener('blur', blur);
     return () => {
       line?.remove();
       el.removeEventListener('pointerdown', down);
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', finish);
       el.removeEventListener('pointercancel', finish);
+      window.removeEventListener('keydown', keydown);
+      window.removeEventListener('keyup', keyup);
+      window.removeEventListener('blur', blur);
+      el.style.cursor = '';
       m.dragging.enable();
       m.doubleClickZoom.enable();
       m.touchZoom.enable();
@@ -225,8 +302,33 @@ export default function WalkMap(props: Props) {
       {(props.drawing || props.pickingStart) && (
         <div className="map-instruction">
           {props.drawing
-            ? 'Проведіть маршрут пальцем або мишкою'
+            ? 'Один палець — малювати, два — масштаб. Відпустіть для побудови.'
             : 'Пересуньте карту під приціл і підтвердьте старт'}
+        </div>
+      )}
+      {props.mode === 'draw' && props.start && (
+        <div className="map-draw-tools">
+          <button
+            onClick={props.onToggleDrawing}
+            className={props.drawing ? 'active' : ''}
+            aria-pressed={props.drawing}
+          >
+            {props.drawing ? <Hand size={17} /> : <Pencil size={17} />}{' '}
+            {props.drawing
+              ? 'Рухати карту'
+              : props.sketch.length
+                ? 'Продовжити лінію'
+                : 'Малювати'}
+          </button>
+          {props.sketch.length > 0 && (
+            <button
+              onClick={props.onNewSketch}
+              aria-label="Новий малюнок"
+              title="Новий малюнок"
+            >
+              <RotateCcw size={17} />
+            </button>
+          )}
         </div>
       )}
       <div className="map-controls">
