@@ -22,6 +22,9 @@ import {
   Info,
 } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Slider } from '@/components/ui/slider';
+import ProfileForm from './profile-form';
+import { DEFAULT_HEIGHT, readProfile, strideFromHeight } from '@/lib/profile';
 import { Switch } from '@/components/ui/switch';
 import {
   Dialog,
@@ -57,9 +60,10 @@ export default function Planner() {
     [startLabel, setStartLabel] = useState('Старт ще не обрано'),
     [points, setPoints] = useState<Point[]>([]),
     [walk, setWalk] = useState<Walk | null>(null);
-  const [stride, setStride] = useState(72),
+  const [height, setHeight] = useState(DEFAULT_HEIGHT),
     [goal, setGoal] = useState(10000),
     [done, setDone] = useState(0),
+    [sliderMax, setSliderMax] = useState(10000),
     [back, setBack] = useState(false),
     [pickingStart, setPickingStart] = useState(false),
     [drawing, setDrawing] = useState(false),
@@ -76,6 +80,7 @@ export default function Planner() {
     [storageError, setStorageError] = useState(false);
   const controller = useRef<AbortController | null>(null),
     gpsVersion = useRef(0);
+  const stride = strideFromHeight(height);
   const remaining = Math.max(0, goal - done),
     shownWalk = useMemo(
       () => walk && (back && mode !== 'auto' ? withReturn(walk) : walk),
@@ -86,21 +91,16 @@ export default function Planner() {
     queueMicrotask(() => {
       try {
         const raw = JSON.parse(localStorage.getItem('krok-settings') || '{}');
-        if (
-          Number.isFinite(raw.stride) &&
-          raw.stride >= 30 &&
-          raw.stride <= 150
-        )
-          setStride(raw.stride);
-        if (Number.isFinite(raw.goal) && raw.goal >= 1000 && raw.goal <= 50000)
-          setGoal(raw.goal);
-        if (
-          raw.date === today() &&
-          Number.isFinite(raw.done) &&
-          raw.done >= 0 &&
-          raw.done <= 100000
-        )
-          setDone(raw.done);
+        const profile = readProfile(raw ?? {}, today());
+        setHeight(profile.height);
+        setGoal(profile.goal);
+        setDone(profile.done);
+        setSliderMax(
+          Math.max(
+            profile.goal || 10000,
+            Math.ceil(profile.done / 1000) * 1000,
+          ),
+        );
       } catch {
         setStorageError(true);
       }
@@ -136,12 +136,12 @@ export default function Planner() {
       try {
         localStorage.setItem(
           'krok-settings',
-          JSON.stringify({ stride, goal, done, date: today() }),
+          JSON.stringify({ height, goal, done, date: today(), version: 2 }),
         );
       } catch {
         queueMicrotask(() => setStorageError(true));
       }
-  }, [stride, goal, done, loaded]);
+  }, [height, goal, done, loaded]);
   function invalidate() {
     controller.current?.abort();
     controller.current = null;
@@ -222,10 +222,7 @@ export default function Planner() {
   }
   function onPoint(p: Point) {
     if (busy) return;
-    if (pickingStart || !start) {
-      chooseStart(p);
-      return;
-    }
+    if (pickingStart || !start) return;
     if (mode === 'auto') {
       setMessage('Натисніть «Запропонувати прогулянку».');
       return;
@@ -310,7 +307,7 @@ export default function Planner() {
     }
   }
   const guidance = pickingStart
-    ? 'Поставте старт на карті'
+    ? 'Наведіть приціл на місце старту'
     : !start
       ? 'Де почнемо прогулянку?'
       : mode === 'draw'
@@ -383,14 +380,24 @@ export default function Planner() {
             <div className="goal-number">
               {fmt(remaining)} <span>кроків залишилось</span>
             </div>
-            <div className="goal-track">
-              <span
-                style={{ width: Math.min(100, (done / goal) * 100) + '%' }}
-              />
-            </div>
+            <span id="daily-steps-label" className="sr-only">
+              Пройдено сьогодні, кроків
+            </span>
+            <Slider
+              className="daily-steps-slider"
+              value={[done]}
+              min={0}
+              max={sliderMax}
+              step={1}
+              largeStep={100}
+              aria-labelledby="daily-steps-label"
+              onValueChange={(value) =>
+                setDone(Array.isArray(value) ? value[0] : value)
+              }
+            />
             <div className="goal-meta">
-              <span>Пройдено {fmt(done)}</span>
-              <span>з {fmt(goal)}</span>
+              <span aria-live="polite">Пройдено {fmt(done)}</span>
+              <span>Ціль {fmt(goal)}</span>
             </div>
           </div>
           <div className="section-label">
@@ -418,12 +425,14 @@ export default function Planner() {
               className={'secondary-button ' + (pickingStart ? 'selected' : '')}
               disabled={busy}
               onClick={() => {
+                gpsVersion.current++;
+                setGpsBusy(false);
                 setPickingStart(!pickingStart);
                 setDrawing(false);
               }}
             >
               <MapPin size={16} />
-              На карті
+              {pickingStart ? 'Скасувати вибір' : 'На карті'}
             </button>
           </div>
           {!start && (
@@ -630,6 +639,8 @@ export default function Planner() {
             walk={shownWalk}
             drawing={drawing}
             pickingStart={pickingStart}
+            busy={busy}
+            onConfirmStart={(p) => chooseStart(p)}
             onPoint={onPoint}
             onSketch={(p) => {
               invalidate();
@@ -651,8 +662,8 @@ export default function Planner() {
             <div>
               <strong>{guidance}</strong>
               <span>
-                {!start
-                  ? 'Оберіть старт зліва або торкніться карти'
+                {pickingStart || !start
+                  ? 'Пересуньте карту й натисніть «Підтвердити старт тут»'
                   : mode === 'auto'
                     ? 'Натисніть кнопку — знайдемо варіант для вас'
                     : mode === 'draw'
@@ -670,66 +681,23 @@ export default function Planner() {
             Підлаштуйте розрахунок під себе. Налаштування зберігаються в цьому
             браузері.
           </DialogDescription>
-          <label className="field">
-            Денна ціль, кроків
-            <input
-              type="number"
-              min="1000"
-              max="50000"
-              step="500"
-              defaultValue={goal}
-              onBlur={(e) => {
-                const n = e.target.valueAsNumber;
-                const next = Number.isFinite(n)
-                  ? Math.round(Math.max(1000, Math.min(50000, n)))
-                  : goal;
-                setGoal(next);
-                e.target.value = String(next);
-              }}
-            />
-          </label>
-          <label className="field">
-            Вже пройдено сьогодні
-            <input
-              type="number"
-              min="0"
-              max="100000"
-              defaultValue={done}
-              onBlur={(e) => {
-                const n = e.target.valueAsNumber;
-                const next = Number.isFinite(n)
-                  ? Math.round(Math.max(0, Math.min(100000, n)))
-                  : done;
-                setDone(next);
-                e.target.value = String(next);
-              }}
-            />
-            <small>
-              Внесіть число зі свого крокоміра. Воно скидається наступного дня
-              при відкритті.
-            </small>
-          </label>
-          <label className="field">
-            Довжина одного кроку, см
-            <input
-              type="number"
-              min="30"
-              max="150"
-              defaultValue={stride}
-              onBlur={(e) => {
-                const n = e.target.valueAsNumber;
-                const next = Number.isFinite(n)
-                  ? Math.max(30, Math.min(150, n))
-                  : stride;
-                setStride(next);
-                e.target.value = String(next);
-              }}
-            />
-            <small>
-              Для калібрування пройдіть відому дистанцію: 100 метрів ÷ кількість
-              кроків × 100 = довжина в см.
-            </small>
-          </label>
+          <ProfileForm
+            height={height}
+            goal={goal}
+            done={done}
+            onSave={(profile) => {
+              setHeight(profile.height);
+              setGoal(profile.goal);
+              setDone(profile.done);
+              setSliderMax(
+                Math.max(
+                  profile.goal || 10000,
+                  Math.ceil(profile.done / 1000) * 1000,
+                ),
+              );
+              setSettings(false);
+            }}
+          />
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -757,7 +725,10 @@ export default function Planner() {
               <input
                 placeholder="50.4501, 30.5234"
                 value={manual}
-                onChange={(e) => {setManual(e.target.value);setCoordinateError('');}}
+                onChange={(e) => {
+                  setManual(e.target.value);
+                  setCoordinateError('');
+                }}
               />
             </label>
             <button
@@ -766,12 +737,20 @@ export default function Planner() {
             >
               Застосувати координати
             </button>
-            {coordinateError && <p className="notice" role="alert">{coordinateError}</p>}
+            {coordinateError && (
+              <p className="notice" role="alert">
+                {coordinateError}
+              </p>
+            )}
           </form>
           {storageError && (
             <p className="notice">Браузер не дозволяє зберегти налаштування.</p>
           )}
-          <button className="primary-button" onClick={() => setSettings(false)}>
+          <button
+            className="primary-button"
+            type="submit"
+            form="profile-settings"
+          >
             Готово <Check size={18} />
           </button>
         </DialogContent>

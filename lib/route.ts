@@ -108,6 +108,37 @@ export async function walkingRoute(
     )
   )
     throw new Error('Перевірте координати.');
+  // The public pedestrian service accepts at most ten locations per request.
+  // Keep every waypoint, sharing the boundary point between successive chunks.
+  const cleaned = points.filter(
+    (p, i) => i === 0 || distance(points[i - 1], p) >= 1,
+  );
+  if (cleaned.length < 2)
+    throw new Error('Маршрут надто короткий. Оберіть різні точки.');
+  const combined: Walk = { points: [], meters: 0, seconds: 0 };
+  for (let offset = 0; offset < cleaned.length - 1; offset += 9) {
+    signal.throwIfAborted();
+    const part = await requestWalkingRoute(
+      cleaned.slice(offset, offset + 10),
+      signal,
+    );
+    if (
+      combined.points.length &&
+      distance(combined.points.at(-1)!, part.points[0]) > 5
+    )
+      throw new Error(
+        'Частини маршруту не з’єдналися. Перемістіть точку ближче до стежки.',
+      );
+    combined.points.push(...part.points);
+    combined.meters += part.meters;
+    combined.seconds += part.seconds;
+  }
+  return combined;
+}
+async function requestWalkingRoute(
+  points: Point[],
+  signal: AbortSignal,
+): Promise<Walk> {
   const delay = Math.max(0, 1100 - (Date.now() - lastRequest));
   if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay));
   signal.throwIfAborted();

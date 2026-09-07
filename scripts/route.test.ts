@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  parseStepCount,
+  readProfile,
+  strideFromHeight,
+} from '../lib/profile.ts';
+import {
   stepsFor,
   distance,
   destination,
@@ -15,6 +20,108 @@ void test('personal stride changes step estimate and rejects invalid inputs', ()
   assert.equal(stepsFor(7200, 80), 9000);
   assert.throws(() => stepsFor(20, 0));
   assert.throws(() => stepsFor(NaN, 72));
+});
+void test('empty step fields save zero and zero survives profile reload', () => {
+  assert.equal(parseStepCount('', 50000), 0);
+  assert.equal(parseStepCount('   ', 100000), 0);
+  assert.equal(parseStepCount('12000', 50000), 12000);
+  assert.equal(parseStepCount('-20', 50000), 0);
+  assert.equal(parseStepCount('50001', 50000), 50000);
+  assert.equal(
+    readProfile({ goal: 0, done: 0, date: '2026-09-07' }, '2026-09-07').goal,
+    0,
+  );
+});
+void test('height estimates one step and old stride is not mistaken for height', () => {
+  assert.equal(strideFromHeight(180), 73.8);
+  assert.equal(strideFromHeight(160), 65.6);
+  assert.throws(() => strideFromHeight(0));
+  assert.throws(() => strideFromHeight(NaN));
+  assert.equal(
+    readProfile({ stride: 80, goal: 12000 }, '2026-09-07').height,
+    175,
+  );
+  assert.equal(
+    readProfile({ height: 180, done: 1000, date: '2026-09-06' }, '2026-09-07')
+      .done,
+    0,
+  );
+});
+
+function encode(points: Point[]) {
+  let lat = 0,
+    lon = 0,
+    out = '';
+  for (const p of points) {
+    const next = [Math.round(p[0] * 1e6), Math.round(p[1] * 1e6)];
+    for (const delta of [next[0] - lat, next[1] - lon]) {
+      let n = delta < 0 ? ~(delta << 1) : delta << 1;
+      while (n >= 32) {
+        out += String.fromCharCode((32 | (n & 31)) + 63);
+        n >>= 5;
+      }
+      out += String.fromCharCode(n + 63);
+    }
+    [lat, lon] = next;
+  }
+  return out;
+}
+void test('19-point sketch is split at the ten-location limit without losing waypoints', async () => {
+  const original = globalThis.fetch;
+  const input: Point[] = Array.from({ length: 19 }, (_, i) => [
+    50,
+    30 + i * 0.0001,
+  ]);
+  const requests: Point[][] = [];
+  try {
+    globalThis.fetch = async (url) => {
+      const parsed = new URL(
+        typeof url === 'string' ? url : url instanceof URL ? url.href : url.url,
+      );
+      const body = JSON.parse(parsed.searchParams.get('json')!) as {
+        locations: { lat: number; lon: number }[];
+      };
+      assert.ok(body.locations.length <= 10);
+      const locations = body.locations.map(({ lat, lon }): Point => [lat, lon]);
+      requests.push(locations);
+      return new Response(
+        JSON.stringify({
+          trip: {
+            status: 0,
+            legs: [{ shape: encode(locations) }],
+            summary: { length: 1, time: 600 },
+          },
+        }),
+      );
+    };
+    const result = await walkingRoute(input, new AbortController().signal);
+    assert.deepEqual(
+      requests.map((r) => r.length),
+      [10, 10],
+    );
+    assert.deepEqual([...requests[0], ...requests[1].slice(1)], input);
+    assert.equal(result.meters, 2000);
+    assert.equal(result.seconds, 1200);
+    assert.deepEqual(result.points[0], input[0]);
+    assert.deepEqual(result.points.at(-1), input.at(-1));
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      if (calls === 2) return new Response('', { status: 503 });
+      return new Response(
+        JSON.stringify({
+          trip: {
+            status: 0,
+            legs: [{ shape: encode(input.slice(0, 10)) }],
+            summary: { length: 1, time: 600 },
+          },
+        }),
+      );
+    };
+    await assert.rejects(walkingRoute(input, new AbortController().signal));
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 void test('return route doubles distance and reverses the same geometry', () => {
   const route = {

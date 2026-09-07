@@ -10,6 +10,8 @@ type Props = {
   walk: Walk | null;
   drawing: boolean;
   pickingStart: boolean;
+  busy: boolean;
+  onConfirmStart: (p: Point) => void;
   onPoint: (p: Point) => void;
   onSketch: (p: Point[]) => void;
   onGps: () => void;
@@ -50,7 +52,12 @@ export default function WalkMap(props: Props) {
           .addTo(m);
         layers.current = L.layerGroup().addTo(m);
         m.on('click', (e) => {
-          if (!latest.current.drawing)
+          if (
+            !latest.current.drawing &&
+            !latest.current.pickingStart &&
+            latest.current.start &&
+            !latest.current.busy
+          )
             latest.current.onPoint([e.latlng.lat, e.latlng.lng]);
         });
         setReady(true);
@@ -119,6 +126,13 @@ export default function WalkMap(props: Props) {
   useEffect(() => {
     if (ready && props.start) map.current?.setView(props.start, 15);
   }, [ready, props.start]);
+  useEffect(() => {
+    if (
+      (props.pickingStart || props.drawing) &&
+      window.matchMedia('(max-width:700px)').matches
+    )
+      container.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [props.pickingStart, props.drawing]);
   useEffect(() => {
     if (ready && props.walk)
       map.current?.fitBounds(props.walk.points, {
@@ -212,7 +226,7 @@ export default function WalkMap(props: Props) {
         <div className="map-instruction">
           {props.drawing
             ? 'Проведіть маршрут пальцем або мишкою'
-            : 'Торкніться карти, щоб поставити старт'}
+            : 'Пересуньте карту під приціл і підтвердьте старт'}
         </div>
       )}
       <div className="map-controls">
@@ -250,18 +264,23 @@ export default function WalkMap(props: Props) {
           <Scan size={20} />
         </button>
       </div>
-      <button
-        className="map-center-button"
-        onClick={() => {
-          const c = map.current?.getCenter();
-          if (c) props.onPoint([c.lat, c.lng]);
-        }}
-      >
-        <MapPin size={16} /> Обрати центр карти
-      </button>
-      <span className="center-cross" aria-hidden="true">
-        +
-      </span>
+      {(props.pickingStart || (!props.start && !props.drawing)) && (
+        <button
+          className="map-center-button confirm-start-button"
+          disabled={!ready || props.busy}
+          onClick={() => {
+            const c = map.current?.getCenter();
+            if (c) props.onConfirmStart([c.lat, c.lng]);
+          }}
+        >
+          <MapPin size={16} /> Підтвердити старт тут
+        </button>
+      )}
+      {(props.pickingStart || !props.start) && (
+        <span className="center-cross" aria-hidden="true">
+          +
+        </span>
+      )}
       {!ready && <div className="map-loading">Завантаження карти…</div>}
     </section>
   );

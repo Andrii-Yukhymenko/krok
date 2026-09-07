@@ -1027,3 +1027,53 @@ h1 span {
     font-size: 11px;
   }
 }
+.profile-fields {
+  display: grid;
+  gap: 17px;
+}
+.daily-steps-slider {
+  margin: 7px 0 1px;
+}
+.daily-steps-slider [data-slot='slider-track'] {
+  height: 6px;
+  background: #d6e3bf;
+}
+.daily-steps-slider [data-slot='slider-range'] {
+  background: #517b36;
+}
+.daily-steps-slider [data-slot='slider-thumb'] {
+  width: 22px;
+  height: 22px;
+  border: 3px solid #fff;
+  background: #517b36;
+  box-shadow: 0 1px 5px #163c3240;
+}
+.daily-steps-slider [data-slot='slider-thumb']:focus-visible {
+  outline: 3px solid #17694f;
+  outline-offset: 3px;
+}
+.daily-steps-slider > div {
+  min-height: 36px;
+}
+.confirm-start-button {
+  background: #163e32;
+  color: #fff;
+  border-color: #163e32;
+  box-shadow: 0 3px 12px #163c3226;
+  font-weight: 600;
+  min-height: 44px;
+}
+.picking-start .map-canvas {
+  cursor: grab;
+}
+.picking-start .map-canvas:active {
+  cursor: grabbing;
+}
+.center-cross {
+  font-size: 36px;
+  color: #163e32;
+  opacity: 1;
+  text-shadow:
+    0 0 3px white,
+    0 0 5px white;
+}
