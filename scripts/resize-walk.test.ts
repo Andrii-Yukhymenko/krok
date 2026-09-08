@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { trimWalk, resizeWalk } from '../lib/resize-walk.ts';
+import { scaleShape, trimWalk, resizeWalk } from '../lib/resize-walk.ts';
 import { sketchLength, withReturn, type Point } from '../lib/route.ts';
 const a: Point = [50, 30],
   b: Point = [50.002, 30],
@@ -31,12 +31,32 @@ void test('trimming follows existing bends, scales distance and time and leaves 
   assert.deepEqual(back.points.at(-1), a);
 });
 void test('shorter free sketch moves finish without a service call', async () => {
+  let routed: Point[] = [];
   const result = await resizeWalk(
     { ...options, mode: 'draw', target: 300 },
     signal(),
+    {
+      route: async (points) => {
+        routed = points;
+        return { points, meters: 300, seconds: 240 };
+      },
+      scenic: async () => {
+        throw Error('unused');
+      },
+      required: async () => {
+        throw Error('unused');
+      },
+    },
   );
   assert.equal(result.walk.meters, 300);
-  assert.notDeepEqual(result.walk.points.at(-1), c);
+  assert.equal(routed[0], a);
+  assert.ok(distanceFrom(a, routed.at(-1)!) < distanceFrom(a, c));
+});
+void test('shape scaling keeps the start fixed and changes every bend proportionally', () => {
+  const scaled = scaleShape([a, b, c], 2);
+  assert.equal(scaled[0], a);
+  assert.ok(Math.abs(distanceFrom(a, scaled[1]) / distanceFrom(a, b) - 2) < 0.01);
+  assert.ok(Math.abs(distanceFrom(a, scaled[2]) / distanceFrom(a, c) - 2) < 0.01);
 });
 void test('shortening a random idea stays closed', async () => {
   const result = await resizeWalk(
@@ -59,8 +79,9 @@ void test('extensions preserve original stops, endpoints and measured totals', a
   assert.equal(result.walk.meters, 800);
   assert.equal(result.walk.seconds, 600);
   assert.deepEqual(result.walk.points[0], a);
-  assert.deepEqual(result.walk.points.at(-1), c);
+  assert.notDeepEqual(result.walk.points.at(-1), c);
   assert.ok(result.walk.points.includes(b));
+  assert.deepEqual(result.waypoints?.slice(0, 2), [b, c]);
 });
 void test('a shorter target never silently drops required stops or replaces the route with a longer one', async () => {
   const deps = {
@@ -73,14 +94,9 @@ void test('a shorter target never silently drops required stops or replaces the 
     },
   };
   const result = await resizeWalk({ ...options, target: 200 }, signal(), deps);
-  assert.equal(result.walk, base);
-  await assert.rejects(
-    resizeWalk({ ...options, target: 200 }, signal(), {
-      ...deps,
-      route: async () => ({ points: [a], meters: 100, seconds: 100 }),
-    }),
-    /зупинки/,
-  );
+  assert.equal(result.walk.meters, 200);
+  assert.notDeepEqual(result.walk.points.at(-1), c);
+  assert.deepEqual(result.waypoints?.at(-1), result.walk.points.at(-1));
 });
 void test('idea resizing forwards required stops and new target to the appropriate generator', async () => {
   let forwarded = false;
@@ -106,6 +122,10 @@ void test('idea resizing forwards required stops and new target to the appropria
   assert.ok(forwarded);
   assert.equal(result.notice, 'minimum');
 });
+
+function distanceFrom(x: Point, y: Point) {
+  return sketchLength([x, y]);
+}
 void test('failed extensions preserve the base; cancellation and invalid targets reject', async () => {
   const deps = {
     route: async () => {

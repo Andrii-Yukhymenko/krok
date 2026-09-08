@@ -67,7 +67,11 @@ export default function Planner() {
   const [resizing, setResizing] = useState(false);
   const resizeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resizeAbort = useRef<AbortController | null>(null);
-  const resizeBase = useRef<{ walk: Walk; places: Place[] } | null>(null);
+  const resizeBase = useRef<{
+    walk: Walk;
+    places: Place[];
+    required: Point[];
+  } | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [sketch, setSketch] = useState<Point[]>([]);
   const [mustVisit, setMustVisit] = useState<Point[]>([]);
@@ -128,7 +132,12 @@ export default function Planner() {
   );
   function changeLength(value: number) {
     if (!walk || !start || busy) return;
-    if (!resizeBase.current) resizeBase.current = { walk, places: routePlaces };
+    if (!resizeBase.current)
+      resizeBase.current = {
+        walk,
+        places: routePlaces,
+        required: mode === 'auto' ? mustVisit : points,
+      };
     const snapshot = resizeBase.current;
     if (resizeTimer.current) clearTimeout(resizeTimer.current);
     resizeAbort.current?.abort();
@@ -144,7 +153,7 @@ export default function Planner() {
           {
             base: snapshot.walk,
             start,
-            required: mode === 'auto' ? mustVisit : points,
+            required: snapshot.required,
             mode,
             style: ideaStyle,
             target: (value * stride) / 100 / multiplier,
@@ -153,6 +162,8 @@ export default function Planner() {
         );
         if (abort.signal.aborted) return;
         setWalk(result.walk);
+        if (result.waypoints && mode !== 'auto' && mode !== 'draw')
+          setPoints(result.waypoints);
         setRoutePlaces(
           result.walk === snapshot.walk ? snapshot.places : result.places,
         );
