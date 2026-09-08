@@ -12,6 +12,7 @@ import {
   RotateCcw,
   Trash2,
   Route,
+  Leaf,
 } from 'lucide-react';
 import {
   DEFAULT_START,
@@ -128,15 +129,22 @@ export default function WalkMap(props: Props) {
     };
     group.clearLayers();
     if (props.mode === 'auto' && props.walk)
-      props.suggestedPoints.forEach((p) => {
-        L.circleMarker(p, {
-          radius: 7,
-          color: '#fff',
-          weight: 2,
-          fillColor: '#b66f08',
-          fillOpacity: 1,
+      props.suggestedPoints.forEach((p, i) => {
+        L.marker(p, {
+          title: 'Додане місце ' + (i + 1),
+          alt: 'Додане генератором місце ' + (i + 1),
+          zIndexOffset: 200,
+          icon: L.divIcon({
+            className: 'map-pin-icon idea-pin-icon',
+            html: '<div class="idea-pin idea-pin-suggested"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 2.5 17 2.5c2 4 3 8 .8 12.3A7 7 0 0 1 11 20Z"/><path d="M2 22c0-6 6-10 10-12"/></svg></div>',
+            iconSize: [44, 50],
+            iconAnchor: [22, 48],
+            tooltipAnchor: [0, -40],
+            popupAnchor: [0, -40],
+          }),
         })
-          .bindTooltip('Місце, додане генератором')
+          .bindTooltip('Додане генератором місце ' + (i + 1))
+          .bindPopup('Місце ' + (i + 1) + ', додане генератором до прогулянки.')
           .addTo(group);
       });
     if (!props.walk && props.points.length && props.start)
@@ -190,18 +198,26 @@ export default function WalkMap(props: Props) {
           icon: L.divIcon({
             className:
               'map-pin-icon' +
+              (props.mode === 'auto' ? ' idea-pin-icon' : '') +
               (editing ? ' editable-pin' : '') +
               (editing && props.selectedPoint === i ? ' selected-pin' : ''),
             html:
-              '<div class="krok-waypoint"><span>' +
+              '<div class="' +
+              (props.mode === 'auto'
+                ? 'idea-pin idea-pin-required'
+                : 'krok-waypoint') +
+              '"><span>' +
               (props.mode === 'draw'
                 ? 'Ф'
                 : props.mode === 'auto'
-                  ? '★' + String(i + 1)
+                  ? String(i + 1)
                   : String(i + 1)) +
               '</span></div>',
-            iconSize: editing ? [44, 44] : [30, 30],
-            iconAnchor: editing ? [22, 22] : [15, 15],
+            iconSize:
+              props.mode === 'auto' ? [44, 50] : editing ? [44, 44] : [30, 30],
+            iconAnchor:
+              props.mode === 'auto' ? [22, 48] : editing ? [22, 22] : [15, 15],
+            tooltipAnchor: props.mode === 'auto' ? [0, -40] : [0, 0],
           }),
           keyboard: false,
           zIndexOffset: 100,
@@ -529,7 +545,15 @@ export default function WalkMap(props: Props) {
             </div>
             {props.mode === 'auto' && (
               <span className="point-tool-hint">
-                ★ Ваші зупинки · золоті — додані місця
+                <span className="stop-legend">
+                  <span className="stop-key required-key">1</span> Ваші зупинки
+                </span>
+                <span className="stop-legend">
+                  <span className="stop-key suggested-key">
+                    <Leaf size={14} />
+                  </span>{' '}
+                  Додані місця
+                </span>
               </span>
             )}
             {props.pointTool === 'edit' && (
