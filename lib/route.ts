@@ -1,3 +1,4 @@
+import { routingFetch } from './service.ts';
 export type Point = [number, number];
 export type Walk = { points: Point[]; meters: number; seconds: number };
 export const DEFAULT_START: Point = [50.4501, 30.5234];
@@ -227,7 +228,7 @@ async function requestWalkingRoute(
     directions_options: { units: 'kilometers' },
     costing_options: { pedestrian: WALK_PREFERENCES },
   };
-  const response = await fetch(
+  const response = await routingFetch(
     endpoint + '?json=' + encodeURIComponent(JSON.stringify(request)),
     { signal: AbortSignal.any([signal, AbortSignal.timeout(25000)]) },
   );
@@ -235,7 +236,9 @@ async function requestWalkingRoute(
     throw new Error(
       response.status === 429
         ? 'Сервіс зайнятий. Зачекайте трохи й спробуйте ще раз.'
-        : 'Не вдалося прокласти шлях. Перемістіть точку ближче до дороги.',
+        : response.status >= 500
+          ? 'Сервіс маршрутів тимчасово недоступний. Спробуйте пізніше.'
+          : 'Не вдалося прокласти шлях. Перемістіть точку ближче до дороги.',
     );
   const data = (await response.json()) as {
     trip?: {
@@ -280,7 +283,7 @@ export async function sketchRoute(
     process.env.NEXT_PUBLIC_ROUTING_URL ||
     'https://valhalla1.openstreetmap.de/route'
   ).replace(/\/route\/?$/, '/trace_route');
-  const response = await fetch(endpoint, {
+  const response = await routingFetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -297,7 +300,9 @@ export async function sketchRoute(
     throw new Error(
       response.status === 429
         ? 'Сервіс зайнятий. Зачекайте й повторіть побудову.'
-        : 'Не вдалося зіставити малюнок із доріжками. Спробуйте провести лінію ближче до них.',
+        : response.status >= 500
+          ? 'Сервіс маршрутів тимчасово недоступний. Спробуйте пізніше.'
+          : 'Не вдалося зіставити малюнок із доріжками. Спробуйте провести лінію ближче до них.',
     );
   const data = (await response.json()) as {
     alternates?: unknown[];

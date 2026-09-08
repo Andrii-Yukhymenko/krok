@@ -1,4 +1,12 @@
 import { distance, walkingRoute, type Point, type Walk } from './route.ts';
+import { PlaceCache, FRESH_MS } from './place-cache.ts';
+import {
+  placesRequest,
+  retryPlaces,
+  recordService,
+  ServiceError,
+} from './service.ts';
+import { routeScore, repeatedRatio } from './route-quality.ts';
 
 export type Place = {
   id: string;
@@ -17,7 +25,11 @@ type Element = {
   geometry?: { lat: number; lon: number }[];
   members?: { role?: string; geometry?: { lat: number; lon: number }[] }[];
 };
-const cache = new Map<string, { time: number; places: Place[] }>();
+const cache = new PlaceCache();
+export function clearPlacesCache() {
+  cache.clear();
+}
+let unavailableUntil = 0;
 export function placeKind(
   tags: Record<string, string>,
 ): { kind: string; priority: number } | null {
@@ -128,40 +140,58 @@ export async function nearbyPlaces(
   start: Point,
   targetMeters: number,
   signal: AbortSignal,
+  onNotice?: (notice: string) => void,
 ): Promise<Place[]> {
-  const radius = Math.round(Math.max(700, Math.min(4000, targetMeters / 2)));
-  const key = start.map((n) => n.toFixed(3)).join(',') + ':' + radius;
-  const cached = cache.get(key);
-  if (cached && Date.now() - cached.time < 600000) return cached.places;
+  signal.throwIfAborted();
+  const requested = Math.round(Math.max(700, Math.min(4000, targetMeters / 2)));
+  const radius = Math.min(4000, Math.ceil(requested / 1000) * 1000);
+  const source =
+    process.env.NEXT_PUBLIC_PLACES_URL ||
+    'https://overpass-api.de/api/interpreter';
+  const cached = cache.find(source, start, requested);
+  const select = (places: Place[]) =>
+    places.filter((p) => distance(start, p.point) < requested);
+  if (cached && Date.now() - cached.time < FRESH_MS) {
+    recordService('places', 'cache-fresh');
+    return select(cached.places);
+  }
   const around = `(around:${radius},${start[0]},${start[1]})`;
   const query = `[out:json][timeout:20];(nwr${around}[leisure~"^(park|garden)$"][access!~"^(private|no)$"];nwr${around}[natural=beach][access!~"^(private|no)$"];way${around}[highway=pedestrian];nwr${around}[place=square];way${around}[highway~"^(footway|path)$"][name~"бульвар|набереж|promenade|boulevard|embankment",i];);out tags center geom 120;way${around}[highway~"^(footway|path|pedestrian)$"][access!~"^(private|no)$"][foot!=no];out tags geom 400;`;
-  const response = await fetch(
-    process.env.NEXT_PUBLIC_PLACES_URL ||
-      'https://overpass-api.de/api/interpreter',
-    {
-      method: 'POST',
-      body: new URLSearchParams({ data: query }),
-      signal: AbortSignal.any([signal, AbortSignal.timeout(25000)]),
-    },
-  );
-  if (!response.ok)
-    throw new Error(
-      'Дані про парки зараз недоступні. Спробуйте пізніше або оберіть «Випадкова».',
+  try {
+    if (Date.now() < unavailableUntil)
+      throw new ServiceError(
+        'cooldown',
+        'Сервіс місць тимчасово недоступний. Зачекайте перед новою спробою.',
+      );
+    const request = () =>
+      placesRequest<{ elements: Element[] }>(
+        source,
+        new URLSearchParams({ data: query }),
+        signal,
+      );
+    // A usable older area needs no second network attempt during an outage.
+    const data = cached ? await request() : await retryPlaces(request, signal);
+    signal.throwIfAborted();
+    const places = extractPlaces(data.elements, start).filter(
+      (p) => distance(start, p.point) < radius,
     );
-  const data = (await response.json()) as {
-    elements?: Element[];
-    remark?: string;
-  };
-  if (!data.elements || data.remark)
-    throw new Error(
-      'Не вдалося повністю завантажити місця. Спробуйте ще раз пізніше.',
-    );
-  const places = extractPlaces(data.elements, start).filter(
-    (p) => distance(start, p.point) < radius,
-  );
-  if (cache.size >= 8) cache.delete(cache.keys().next().value!);
-  cache.set(key, { time: Date.now(), places });
-  return places;
+    cache.put({ source, center: start, radius, time: Date.now(), places });
+    return select(places);
+  } catch (error) {
+    if (signal.aborted) throw signal.reason;
+    if (error instanceof ServiceError && error.retryable)
+      unavailableUntil = Date.now() + Math.max(30000, error.retryAfter);
+    if (cached) {
+      recordService('places', 'cache-stale');
+      onNotice?.(
+        'Сервіс місць недоступний. Використано збережені місця від ' +
+          new Date(cached.time).toLocaleDateString('uk-UA') +
+          '. Для побудови шляху потрібен інтернет.',
+      );
+      return select(cached.places);
+    }
+    throw error;
+  }
 }
 export function placeCandidates(
   start: Point,
@@ -210,8 +240,9 @@ export async function scenicWalk(
   target: number,
   signal: AbortSignal,
   variation = 0,
+  onNotice?: (notice: string) => void,
 ): Promise<{ walk: Walk; places: Place[] }> {
-  const places = await nearbyPlaces(start, target, signal),
+  const places = await nearbyPlaces(start, target, signal, onNotice),
     candidates = placeCandidates(start, target, places, variation);
   if (!candidates.length)
     throw new Error(
@@ -226,12 +257,13 @@ export async function scenicWalk(
         [start, ...stops.map((p) => p.point), start],
         signal,
       );
-      if (
-        !best ||
-        Math.abs(walk.meters - target) < Math.abs(best.walk.meters - target)
-      )
+      if (!best || routeScore(walk, target) < routeScore(best.walk, target))
         best = { walk, places: stops };
-      if (Math.abs(walk.meters - target) / target < 0.1) break;
+      if (
+        Math.abs(walk.meters - target) / target < 0.05 &&
+        repeatedRatio(walk) < 0.05
+      )
+        break;
     } catch (error) {
       if (signal.aborted) throw error;
       lastError = error;

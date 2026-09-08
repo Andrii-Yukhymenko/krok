@@ -34,7 +34,9 @@ import {
 } from '@/components/ui/dialog';
 import WalkMap from './walk-map';
 import PlannerPanel from './planner-panel';
-import { scenicWalk, type Place } from '@/lib/places';
+import { scenicWalk, clearPlacesCache, type Place } from '@/lib/places';
+import { diagnosticReport } from '@/lib/service';
+import { repeatedRatio } from '@/lib/route-quality';
 import {
   DEFAULT_START,
   destination,
@@ -61,6 +63,7 @@ export default function Planner() {
   const [sketch, setSketch] = useState<Point[]>([]);
   const [ideaStyle, setIdeaStyle] = useState('scenic');
   const [routePlaces, setRoutePlaces] = useState<Place[]>([]);
+  const [placesNotice, setPlacesNotice] = useState('');
   const ideaVariation = useRef(0);
   const [mode, setMode] = useState<Mode>('point'),
     [start, setStart] = useState<Point | null>(null),
@@ -150,6 +153,7 @@ export default function Planner() {
       }
   }, [height, goal, done, loaded]);
   function invalidate() {
+    setPlacesNotice('');
     controller.current?.abort();
     controller.current = null;
     setBusy(false);
@@ -253,6 +257,7 @@ export default function Planner() {
     if (mode === 'point') void build(next);
   }
   async function suggest() {
+    setPlacesNotice('');
     if (!start) {
       setMessage('Спочатку оберіть старт.');
       return;
@@ -282,6 +287,9 @@ export default function Planner() {
           target,
           abort.signal,
           ideaVariation.current++,
+          (notice) => {
+            if (!abort.signal.aborted) setPlacesNotice(notice);
+          },
         );
         if (!abort.signal.aborted) {
           setWalk(result.walk);
@@ -624,6 +632,7 @@ export default function Planner() {
             </button>
           )}
           <output aria-live="polite">
+            {placesNotice && <p className="notice">{placesNotice}</p>}
             {(!online || message) && (
               <p className="notice">
                 {!online
@@ -632,6 +641,23 @@ export default function Planner() {
               </p>
             )}
           </output>
+          {(message || placesNotice || !online) && (
+            <button
+              className="text-button"
+              onClick={() => {
+                const url = URL.createObjectURL(
+                  new Blob([diagnosticReport()], { type: 'application/json' }),
+                );
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'krok-diagnostics.json';
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+              }}
+            >
+              Зберегти звіт без координат
+            </button>
+          )}
           <div className="result-card" aria-live="polite">
             {shownWalk ? (
               <>
@@ -662,6 +688,11 @@ export default function Planner() {
                 </div>
                 {routePlaces.length > 0 && (
                   <div className="route-places">
+                    <p>
+                      Повторне проходження: ≈{' '}
+                      {Math.round(repeatedRatio(walk!) * 100)}% шляху. Оцінка за
+                      збігами лінії.
+                    </p>
                     {routePlaces.map((place) => (
                       <a
                         key={place.id}
@@ -758,9 +789,11 @@ export default function Planner() {
               <Settings2 size={18} />
               Маршрут
             </button>
-            {(!online || message) && (
+            {(!online || message || placesNotice) && (
               <output className="mobile-notice" aria-live="polite">
-                {!online ? 'Ви офлайн. Потрібен інтернет.' : message}
+                {!online
+                  ? 'Ви офлайн. Потрібен інтернет.'
+                  : [message, placesNotice].filter(Boolean).join(' ')}
               </output>
             )}
             {busy && (
@@ -892,9 +925,20 @@ export default function Planner() {
           <p className="muted">
             Точки та ескіз маршруту надсилаються сервісу Valhalla. Для пошуку
             парків координати старту надсилаються Overpass API; карта
-            завантажується з OpenStreetMap. Координати не зберігаються в
-            налаштуваннях.
+            завантажується з OpenStreetMap. Місця й область пошуку зберігаються
+            лише на цьому пристрої та використовуються до 7 днів. Діагностичний
+            звіт не містить координат, назв місць або ліній маршруту й
+            завантажується лише за вашим натисканням.
           </p>
+          <button
+            className="text-button"
+            onClick={() => {
+              clearPlacesCache();
+              setPlacesNotice('Збережені місця очищено.');
+            }}
+          >
+            Очистити збережені місця
+          </button>
         </DialogContent>
       </Dialog>
     </main>
