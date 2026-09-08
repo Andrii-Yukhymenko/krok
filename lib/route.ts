@@ -69,7 +69,11 @@ export function decodePolyline(encoded: string): Point[] {
   return out;
 }
 // Ramer–Douglas–Peucker in metres: keep meaningful bends, discard hand jitter.
-export function sampleSketch(points: Point[], maxPoints = 200): Point[] {
+export function sampleSketch(
+  points: Point[],
+  maxPoints = 200,
+  baseTolerance = 25,
+): Point[] {
   const clean: Point[] = [];
   points.forEach((p, i) => {
     if (
@@ -110,7 +114,7 @@ export function sampleSketch(points: Point[], maxPoints = 200): Point[] {
       ...simplify(input.slice(index), tolerance),
     ];
   };
-  let tolerance = 25,
+  let tolerance = baseTolerance,
     result = simplify(clean, tolerance);
   while (result.length > maxPoints) {
     tolerance *= 1.5;
@@ -204,7 +208,7 @@ export async function walkingRoute(
 async function requestWalkingRoute(
   points: Point[],
   signal: AbortSignal,
-  guidance = false,
+  guidance: boolean | number = false,
 ): Promise<Walk> {
   const delay = Math.max(0, 1100 - (Date.now() - lastRequest));
   if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay));
@@ -219,14 +223,27 @@ async function requestWalkingRoute(
       lon,
       type: guidance && i > 0 && i < points.length - 1 ? 'through' : 'break',
       ...(guidance && i > 0 && i < points.length - 1
-        ? { radius: 100, rank_candidates: false }
+        ? {
+            radius: typeof guidance === 'number' ? guidance : 100,
+            rank_candidates: false,
+          }
         : {}),
       search_cutoff: 500,
     })),
     costing: 'pedestrian',
     units: 'kilometers',
     directions_options: { units: 'kilometers' },
-    costing_options: { pedestrian: WALK_PREFERENCES },
+    costing_options: {
+      pedestrian: guidance
+        ? {
+            ...WALK_PREFERENCES,
+            walkway_factor: 0.5,
+            alley_factor: 8,
+            service_factor: 4,
+            driveway_factor: 12,
+          }
+        : WALK_PREFERENCES,
+    },
   };
   const response = await routingFetch(
     endpoint + '?json=' + encodeURIComponent(JSON.stringify(request)),
@@ -264,17 +281,69 @@ async function requestWalkingRoute(
   return { points: geometry, meters, seconds };
 }
 
-// Treat the sketch as noisy guidance, never as compulsory intermediate stops.
+export type SketchPrecision = 'loose' | 'balanced' | 'precise';
+export function sketchGuides(
+  sketch: Point[],
+  precision: Exclude<SketchPrecision, 'precise'>,
+) {
+  const radius = precision === 'loose' ? 200 : 100;
+  // A handful of significant bends; no dense samples that attract the route
+  // to every driveway crossed by the user's finger.
+  const anchors = sampleSketch(sketch, 8, precision === 'loose' ? 100 : 50);
+  return { radius, anchors };
+}
+async function contourRoute(
+  start: Point,
+  sketch: Point[],
+  signal: AbortSignal,
+  precision: Exclude<SketchPrecision, 'precise'>,
+): Promise<Walk> {
+  const { anchors, radius } = sketchGuides(sketch, precision);
+  if (
+    anchors.length < 2 ||
+    (anchors.length === 2 && distance(anchors[0], anchors[1]) < 10)
+  )
+    throw new Error(
+      'Контур надто малий для цієї свободи маршруту. Оберіть «Точніше» або «За лінією».',
+    );
+  const route = cleanSketchSpurs(
+    await requestWalkingRoute(anchors, signal, radius),
+    anchors,
+  );
+  if (
+    route.meters > sketchLength(sketch) * 2 + 400 ||
+    distance(route.points[0], sketch[0]) > 150 ||
+    distance(route.points.at(-1)!, sketch.at(-1)!) > 150
+  )
+    throw new Error(
+      'Для цього контуру виходить великий обхід. Уточніть основні повороти або змініть точність.',
+    );
+  if (distance(start, route.points[0]) <= 15) return route;
+  const connector = await walkingRoute([start, route.points[0]], signal);
+  if (distance(connector.points.at(-1)!, route.points[0]) > 5)
+    throw new Error(
+      'Не вдалося з’єднати старт із контуром. Почніть лінію ближче до старту.',
+    );
+  return {
+    points: [...connector.points, ...route.points],
+    meters: connector.meters + route.meters,
+    seconds: connector.seconds + route.seconds,
+  };
+}
+// Loose sketches guide a walking route; only precise mode uses GPS-style matching.
 export async function sketchRoute(
   start: Point,
   sketch: Point[],
   signal: AbortSignal,
+  precision: SketchPrecision = 'loose',
 ): Promise<Walk> {
   const shape = traceSamples(sketch);
   if (shape.length < 2 || sketchLength(shape) < 25)
     throw new Error('Намалюйте маршрут довжиною хоча б 25 метрів.');
   if (sketchLength(shape) > 50000)
     throw new Error('Розділіть малюнок на прогулянки до 50 км.');
+  if (precision !== 'precise')
+    return contourRoute(start, sketch, signal, precision);
   const delay = Math.max(0, 1100 - (Date.now() - lastRequest));
   if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay));
   signal.throwIfAborted();

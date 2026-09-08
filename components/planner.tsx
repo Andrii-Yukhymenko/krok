@@ -47,6 +47,7 @@ import {
   withReturn,
   type Point,
   type Walk,
+  type SketchPrecision,
 } from '@/lib/route';
 
 type Mode = 'point' | 'multi' | 'draw' | 'auto';
@@ -61,6 +62,9 @@ const today = () => new Date().toLocaleDateString('en-CA');
 export default function Planner() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [sketch, setSketch] = useState<Point[]>([]);
+  const [precision, setPrecision] = useState<SketchPrecision>('loose');
+  const [pointTool, setPointTool] = useState<'add' | 'edit' | 'move'>('add');
+  const [selectedPoint, setSelectedPoint] = useState<number | null>(null);
   const [ideaStyle, setIdeaStyle] = useState('scenic');
   const [routePlaces, setRoutePlaces] = useState<Place[]>([]);
   const [placesNotice, setPlacesNotice] = useState('');
@@ -162,6 +166,8 @@ export default function Planner() {
     setRoutePlaces([]);
   }
   function chooseStart(p: Point, label = 'Обрана точка') {
+    setSelectedPoint(null);
+    setPointTool('add');
     gpsVersion.current++;
     setGpsBusy(false);
     invalidate();
@@ -198,6 +204,8 @@ export default function Planner() {
     );
   }
   function changeMode(value: unknown) {
+    setPointTool('add');
+    setSelectedPoint(null);
     invalidate();
     setMode(value as Mode);
     setSketch([]);
@@ -205,7 +213,12 @@ export default function Planner() {
     setDrawing(false);
     setPickingStart(false);
   }
-  async function build(input = points, origin = start, trace = sketch) {
+  async function build(
+    input = points,
+    origin = start,
+    trace = sketch,
+    accuracy = precision,
+  ) {
     if (!origin) {
       setMessage('Спочатку оберіть старт.');
       return;
@@ -225,7 +238,7 @@ export default function Planner() {
     try {
       const result =
         mode === 'draw'
-          ? await sketchRoute(origin, trace, abort.signal)
+          ? await sketchRoute(origin, trace, abort.signal, accuracy)
           : await walkingRoute([origin, ...input], abort.signal);
       if (!abort.signal.aborted) setWalk(result);
     } catch (e) {
@@ -247,6 +260,7 @@ export default function Planner() {
       return;
     }
     if (mode === 'draw') return;
+    if (pointTool !== 'add') return;
     invalidate();
     const next = mode === 'point' ? [p] : [...points, p];
     if (next.length > 18) {
@@ -255,6 +269,28 @@ export default function Planner() {
     }
     setPoints(next);
     if (mode === 'point') void build(next);
+  }
+  function movePoint(index: number, p: Point) {
+    if (index < -1 || index >= points.length) return;
+    if (busy || (mode !== 'point' && mode !== 'multi')) return;
+    const next =
+      index < 0 ? points : points.map((value, i) => (i === index ? p : value));
+    invalidate();
+    if (index < 0) {
+      gpsVersion.current++;
+      setGpsBusy(false);
+      setStart(p);
+      setStartLabel('Старт переміщено вручну');
+    } else setPoints(next);
+    if (next.length) void build(next, index < 0 ? p : start);
+  }
+  function removePoint(index: number) {
+    if (busy || index < 0 || index >= points.length) return;
+    const next = points.filter((_, i) => i !== index);
+    invalidate();
+    setPoints(next);
+    setSelectedPoint(null);
+    if (next.length) void build(next);
   }
   async function suggest() {
     setPlacesNotice('');
@@ -735,6 +771,23 @@ export default function Planner() {
         </PlannerPanel>
         <div className="map-area">
           <WalkMap
+            pointTool={pointTool}
+            selectedPoint={selectedPoint}
+            onPointTool={setPointTool}
+            onSelectPoint={setSelectedPoint}
+            onMovePoint={movePoint}
+            onRemovePoint={removePoint}
+            onBuild={() => void build()}
+            onClearPoints={() => {
+              invalidate();
+              setPoints([]);
+              setSelectedPoint(null);
+            }}
+            precision={precision}
+            onPrecision={(value) => {
+              setPrecision(value);
+              if (sketch.length) void build(points, start, sketch, value);
+            }}
             start={start}
             points={points}
             walk={shownWalk}

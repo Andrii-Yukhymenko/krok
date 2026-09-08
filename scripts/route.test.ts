@@ -16,6 +16,7 @@ import {
   sketchRoute,
   traceSamples,
   cleanSketchSpurs,
+  sketchGuides,
   type Point,
 } from '../lib/route.ts';
 import { directionLane, directionArrows } from '../lib/route-display.ts';
@@ -110,6 +111,72 @@ function encode(points: Point[]) {
   }
   return out;
 }
+void test('loose sketch uses broad through-guides and preserves the contour endpoints', async () => {
+  const original = globalThis.fetch;
+  const center: Point = [50.45, 30.52];
+  const sketch = Array.from({ length: 101 }, (_, i) =>
+    destination(center, 400, i * 3.6),
+  );
+  const loose = sketchGuides(sketch, 'loose'),
+    balanced = sketchGuides(sketch, 'balanced');
+  assert.ok(loose.anchors.length >= 4 && loose.anchors.length <= 8);
+  assert.ok(balanced.anchors.length >= loose.anchors.length);
+  assert.deepEqual(loose.anchors[0], sketch[0]);
+  assert.deepEqual(loose.anchors.at(-1), sketch.at(-1));
+  const radii: number[] = [];
+  try {
+    globalThis.fetch = async (url) => {
+      assert.ok(typeof url === 'string' && url.includes('/route?'));
+      const body = JSON.parse(new URL(String(url)).searchParams.get('json')!);
+      const middle = body.locations.slice(1, -1);
+      assert.ok(
+        middle.length &&
+          middle.every(
+            (p: { type: string; rank_candidates: boolean }) =>
+              p.type === 'through' && p.rank_candidates === false,
+          ),
+      );
+      assert.equal(body.locations[0].type, 'break');
+      assert.equal(body.costing, 'pedestrian');
+      assert.ok(body.costing_options.pedestrian.service_factor >= 4);
+      radii.push(middle[0].radius);
+      return Response.json({
+        trip: {
+          status: 0,
+          legs: [{ shape: encode(sketch) }],
+          summary: { length: 2.6, time: 1900 },
+        },
+      });
+    };
+    const walk = await sketchRoute(
+      sketch[0],
+      sketch,
+      new AbortController().signal,
+    );
+    assert.equal(walk.meters, 2600);
+    await sketchRoute(
+      sketch[0],
+      sketch,
+      new AbortController().signal,
+      'balanced',
+    );
+    assert.deepEqual(radii, [200, 100]);
+    globalThis.fetch = async () =>
+      Response.json({
+        trip: {
+          status: 0,
+          legs: [{ shape: encode(sketch) }],
+          summary: { length: 12, time: 9000 },
+        },
+      });
+    await assert.rejects(
+      sketchRoute(sketch[0], sketch, new AbortController().signal),
+      /обхід/,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
 void test('19-point sketch is split at the ten-location limit without losing waypoints', async () => {
   const original = globalThis.fetch;
   const input: Point[] = Array.from({ length: 19 }, (_, i) => [
@@ -287,17 +354,25 @@ void test('sketch matches the line and replaces fragmented matches with a throug
       shape[0],
       shape,
       new AbortController().signal,
+      'precise',
     );
     assert.equal(walk.meters, 240);
     partial = true;
     assert.equal(
-      (await sketchRoute(shape[0], shape, new AbortController().signal)).meters,
+      (
+        await sketchRoute(
+          shape[0],
+          shape,
+          new AbortController().signal,
+          'precise',
+        )
+      ).meters,
       240,
     );
     assert.equal(fallback, true);
     globalThis.fetch = async () => new Response('', { status: 503 });
     await assert.rejects(
-      sketchRoute(shape[0], shape, new AbortController().signal),
+      sketchRoute(shape[0], shape, new AbortController().signal, 'precise'),
     );
   } finally {
     globalThis.fetch = original;

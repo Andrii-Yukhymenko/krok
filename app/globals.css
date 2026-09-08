@@ -1352,3 +1352,66 @@ h1 span {
     animation: none;
   }
 }
+.map-draw-tools.point-tools,
+.map-draw-tools.sketch-tools {
+  flex-wrap: wrap;
+  max-width: min(360px, calc(100% - 84px));
+}
+.point-tools {
+  flex-direction: column;
+}
+.point-tool-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+.point-tools select,
+.sketch-precision select {
+  min-height: 40px;
+  max-width: 100%;
+  border: 1px solid #c5d4cb;
+  border-radius: 8px;
+  background: white;
+  color: #163e32;
+  padding: 5px;
+  font-size: 14px;
+}
+.sketch-precision {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  font-size: 14px;
+  padding: 3px;
+}
+.point-tool-hint {
+  font-size: 14px;
+  padding: 3px 5px;
+}
+.map-draw-tools button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.leaflet-marker-icon.editable-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+}
+.editable-pin.selected-pin > div {
+  outline: 3px solid #e1a029;
+  outline-offset: 2px;
+}
+.sketch-tools ~ .map-controls {
+  z-index: 7;
+}
+@media (max-width: 1100px) {
+  .is-drawing .map-instruction {
+    top: 195px;
+  }
+}
+.map-draw-tools.point-tools button {
+  min-height: 44px;
+  font-size: 14px;
+}

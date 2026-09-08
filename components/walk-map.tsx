@@ -10,11 +10,29 @@ import {
   Pencil,
   Hand,
   RotateCcw,
+  Trash2,
+  Route,
 } from 'lucide-react';
-import { DEFAULT_START, distance, type Point, type Walk } from '@/lib/route';
+import {
+  DEFAULT_START,
+  distance,
+  type Point,
+  type Walk,
+  type SketchPrecision,
+} from '@/lib/route';
 import { directionLane, directionArrows } from '@/lib/route-display';
 
 type Props = {
+  pointTool: 'add' | 'edit' | 'move';
+  selectedPoint: number | null;
+  onPointTool: (tool: 'add' | 'edit' | 'move') => void;
+  onSelectPoint: (index: number | null) => void;
+  onMovePoint: (index: number, p: Point) => void;
+  onRemovePoint: (index: number) => void;
+  onBuild: () => void;
+  onClearPoints: () => void;
+  precision: SketchPrecision;
+  onPrecision: (value: SketchPrecision) => void;
   start: Point | null;
   points: Point[];
   walk: Walk | null;
@@ -91,6 +109,20 @@ export default function WalkMap(props: Props) {
     if (!ready || !map.current || !api.current || !layers.current) return;
     const L = api.current,
       group = layers.current;
+    const editing =
+      (props.mode === 'point' || props.mode === 'multi') &&
+      props.pointTool === 'edit' &&
+      !props.pickingStart;
+    const wireEditor = (marker: Leaflet.Marker, index: number) => {
+      if (!editing) return marker;
+      marker.on('click', () => latest.current.onSelectPoint(index));
+      marker.on('dragend', () => {
+        const p = marker.getLatLng();
+        latest.current.onSelectPoint(index);
+        latest.current.onMovePoint(index, [p.lat, p.lng]);
+      });
+      return marker;
+    };
     group.clearLayers();
     if (!props.walk && props.points.length && props.start)
       L.polyline(
@@ -103,15 +135,23 @@ export default function WalkMap(props: Props) {
         },
       ).addTo(group);
     if (props.start)
-      L.marker(props.start, {
-        icon: L.divIcon({
-          className: 'map-pin-icon',
-          html: '<div class="krok-start"><span></span></div>',
-          iconSize: [28, 28],
-          iconAnchor: [14, 14],
+      wireEditor(
+        L.marker(props.start, {
+          draggable: editing && !props.busy,
+          title: 'Старт',
+          icon: L.divIcon({
+            className:
+              'map-pin-icon' +
+              (editing ? ' editable-pin' : '') +
+              (editing && props.selectedPoint === -1 ? ' selected-pin' : ''),
+            html: '<div class="krok-start"><span></span></div>',
+            iconSize: editing ? [44, 44] : [28, 28],
+            iconAnchor: editing ? [22, 22] : [14, 14],
+          }),
+          keyboard: false,
         }),
-        keyboard: false,
-      })
+        -1,
+      )
         .bindTooltip('Старт')
         .addTo(group);
     const markers =
@@ -121,24 +161,43 @@ export default function WalkMap(props: Props) {
           : []
         : props.points;
     markers.forEach((p, i) => {
-      if (props.start && distance(props.start, p) < 15) return;
-      L.marker(p, {
-        icon: L.divIcon({
-          className: 'map-pin-icon',
-          html:
-            '<div class="krok-waypoint"><span>' +
-            (props.mode === 'draw' ? 'Ф' : String(i + 1)) +
-            '</span></div>',
-          iconSize: [30, 30],
-          iconAnchor: [15, 15],
+      if (!editing && props.start && distance(props.start, p) < 15) return;
+      wireEditor(
+        L.marker(p, {
+          draggable: editing && !props.busy,
+          title: 'Точка ' + (i + 1),
+          icon: L.divIcon({
+            className:
+              'map-pin-icon' +
+              (editing ? ' editable-pin' : '') +
+              (editing && props.selectedPoint === i ? ' selected-pin' : ''),
+            html:
+              '<div class="krok-waypoint"><span>' +
+              (props.mode === 'draw' ? 'Ф' : String(i + 1)) +
+              '</span></div>',
+            iconSize: editing ? [44, 44] : [30, 30],
+            iconAnchor: editing ? [22, 22] : [15, 15],
+          }),
+          keyboard: false,
+          zIndexOffset: 100,
         }),
-        keyboard: false,
-        zIndexOffset: 100,
-      })
+        i,
+      )
         .bindTooltip(props.mode === 'draw' ? 'Фініш' : 'Точка ' + (i + 1))
         .addTo(group);
     });
-  }, [ready, props.start, props.points, props.walk, props.mode, props.sketch]);
+  }, [
+    ready,
+    props.start,
+    props.points,
+    props.walk,
+    props.mode,
+    props.sketch,
+    props.pointTool,
+    props.selectedPoint,
+    props.busy,
+    props.pickingStart,
+  ]);
   useEffect(() => {
     const L = api.current,
       m = map.current;
@@ -203,15 +262,21 @@ export default function WalkMap(props: Props) {
     return () => observer.disconnect();
   }, [ready]);
   useEffect(() => {
-    if (ready && props.start) map.current?.setView(props.start, 15);
-  }, [ready, props.start]);
+    if (ready && props.start && props.pointTool !== 'edit')
+      map.current?.setView(props.start, 15);
+  }, [ready, props.start, props.pointTool]);
   useEffect(() => {
-    if (ready && props.walk && props.mode !== 'draw')
+    if (
+      ready &&
+      props.walk &&
+      props.mode !== 'draw' &&
+      props.pointTool !== 'edit'
+    )
       map.current?.fitBounds(props.walk.points, {
         padding: [50, 60],
         maxZoom: 16,
       });
-  }, [ready, props.walk, props.mode]);
+  }, [ready, props.walk, props.mode, props.pointTool]);
   useEffect(() => {
     const m = map.current,
       el = container.current,
@@ -351,9 +416,10 @@ export default function WalkMap(props: Props) {
             : 'Пересуньте карту під приціл і підтвердьте старт'}
         </div>
       )}
-      {props.mode === 'draw' && props.start && (
-        <div className="map-draw-tools">
+      {props.mode === 'draw' && props.start && !props.pickingStart && (
+        <div className="map-draw-tools sketch-tools">
           <button
+            disabled={props.busy}
             onClick={props.onToggleDrawing}
             className={props.drawing ? 'active' : ''}
             aria-pressed={props.drawing}
@@ -367,6 +433,7 @@ export default function WalkMap(props: Props) {
           </button>
           {props.sketch.length > 0 && (
             <button
+              disabled={props.busy}
               onClick={props.onNewSketch}
               aria-label="Новий малюнок"
               title="Новий малюнок"
@@ -374,8 +441,144 @@ export default function WalkMap(props: Props) {
               <RotateCcw size={17} />
             </button>
           )}
+          <label className="sketch-precision">
+            Свобода маршруту
+            <select
+              aria-label="Точність ескізу"
+              value={props.precision}
+              disabled={props.busy || props.drawing}
+              onChange={(e) =>
+                props.onPrecision(e.target.value as SketchPrecision)
+              }
+            >
+              <option value="loose">Вільно · до ≈200 м</option>
+              <option value="balanced">Точніше · до ≈100 м</option>
+              <option value="precise">За лінією</option>
+            </select>
+          </label>
         </div>
       )}
+      {(props.mode === 'point' || props.mode === 'multi') &&
+        props.start &&
+        !props.pickingStart && (
+          <div
+            className="map-draw-tools point-tools"
+            aria-label="Керування точками"
+          >
+            <div className="point-tool-row">
+              <button
+                disabled={props.busy}
+                className={props.pointTool === 'add' ? 'active' : ''}
+                aria-pressed={props.pointTool === 'add'}
+                onClick={() => props.onPointTool('add')}
+              >
+                <Plus size={16} />
+                Точки
+              </button>
+              <button
+                disabled={props.busy}
+                className={props.pointTool === 'edit' ? 'active' : ''}
+                aria-pressed={props.pointTool === 'edit'}
+                onClick={() => props.onPointTool('edit')}
+              >
+                <Pencil size={16} />
+                Змінити
+              </button>
+              <button
+                disabled={props.busy}
+                className={props.pointTool === 'move' ? 'active' : ''}
+                aria-pressed={props.pointTool === 'move'}
+                onClick={() => props.onPointTool('move')}
+                title="Рухати карту без додавання точок"
+                aria-label="Рухати карту"
+              >
+                <Hand size={16} />
+              </button>
+            </div>
+            {props.pointTool === 'edit' && (
+              <>
+                <span className="point-tool-hint">
+                  Перетягніть точку — шлях оновиться.
+                </span>
+                <div className="point-tool-row">
+                  <select
+                    aria-label="Точка для редагування"
+                    disabled={props.busy}
+                    value={props.selectedPoint ?? ''}
+                    onChange={(e) =>
+                      props.onSelectPoint(
+                        e.target.value === '' ? null : Number(e.target.value),
+                      )
+                    }
+                  >
+                    <option value="">Оберіть точку</option>
+                    <option value="-1">Старт</option>
+                    {props.points.map((_, i) => (
+                      <option key={i} value={i}>
+                        Точка {i + 1}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    disabled={props.busy || props.selectedPoint === null}
+                    onClick={() => {
+                      const p = map.current?.getCenter();
+                      if (p && props.selectedPoint !== null)
+                        props.onMovePoint(props.selectedPoint, [p.lat, p.lng]);
+                    }}
+                  >
+                    До центру
+                  </button>
+                  <button
+                    aria-label="Видалити обрану точку"
+                    title="Видалити обрану точку"
+                    disabled={
+                      props.busy ||
+                      props.selectedPoint === null ||
+                      props.selectedPoint < 0
+                    }
+                    onClick={() => {
+                      if (props.selectedPoint !== null)
+                        props.onRemovePoint(props.selectedPoint);
+                    }}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </>
+            )}
+            <div className="point-tool-row">
+              <button
+                className="active"
+                disabled={props.busy || !props.points.length}
+                onClick={props.onBuild}
+              >
+                <Route size={16} />
+                {props.busy
+                  ? 'Будуємо…'
+                  : props.walk
+                    ? 'Перебудувати'
+                    : 'Побудувати'}
+              </button>
+              <button
+                disabled={props.busy || !props.points.length}
+                title="Забрати останню точку"
+                aria-label="Забрати останню точку"
+                onClick={() => props.onRemovePoint(props.points.length - 1)}
+              >
+                <RotateCcw size={16} />
+              </button>
+              <button
+                disabled={props.busy || !props.points.length}
+                title="Очистити точки"
+                aria-label="Очистити точки"
+                onClick={props.onClearPoints}
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          </div>
+        )}
       <div className="map-controls">
         <button
           title="Наблизити"
@@ -423,7 +626,11 @@ export default function WalkMap(props: Props) {
           <MapPin size={16} /> Підтвердити старт тут
         </button>
       )}
-      {(props.pickingStart || !props.start) && (
+      {(props.pickingStart ||
+        !props.start ||
+        ((props.mode === 'point' || props.mode === 'multi') &&
+          props.pointTool === 'edit' &&
+          props.selectedPoint !== null)) && (
         <span className="center-cross" aria-hidden="true">
           +
         </span>
