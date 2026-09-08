@@ -23,6 +23,7 @@ import {
 import { directionLane, directionArrows } from '@/lib/route-display';
 
 type Props = {
+  suggestedPoints: Point[];
   pointTool: 'add' | 'edit' | 'move';
   selectedPoint: number | null;
   onPointTool: (tool: 'add' | 'edit' | 'move') => void;
@@ -110,7 +111,9 @@ export default function WalkMap(props: Props) {
     const L = api.current,
       group = layers.current;
     const editing =
-      (props.mode === 'point' || props.mode === 'multi') &&
+      (props.mode === 'point' ||
+        props.mode === 'multi' ||
+        props.mode === 'auto') &&
       props.pointTool === 'edit' &&
       !props.pickingStart;
     const wireEditor = (marker: Leaflet.Marker, index: number) => {
@@ -124,6 +127,18 @@ export default function WalkMap(props: Props) {
       return marker;
     };
     group.clearLayers();
+    if (props.mode === 'auto' && props.walk)
+      props.suggestedPoints.forEach((p) => {
+        L.circleMarker(p, {
+          radius: 7,
+          color: '#fff',
+          weight: 2,
+          fillColor: '#b66f08',
+          fillOpacity: 1,
+        })
+          .bindTooltip('Місце, додане генератором')
+          .addTo(group);
+      });
     if (!props.walk && props.points.length && props.start)
       L.polyline(
         props.mode === 'draw' ? props.sketch : [props.start, ...props.points],
@@ -161,7 +176,13 @@ export default function WalkMap(props: Props) {
           : []
         : props.points;
     markers.forEach((p, i) => {
-      if (!editing && props.start && distance(props.start, p) < 15) return;
+      if (
+        !editing &&
+        props.mode !== 'auto' &&
+        props.start &&
+        distance(props.start, p) < 15
+      )
+        return;
       wireEditor(
         L.marker(p, {
           draggable: editing && !props.busy,
@@ -173,7 +194,11 @@ export default function WalkMap(props: Props) {
               (editing && props.selectedPoint === i ? ' selected-pin' : ''),
             html:
               '<div class="krok-waypoint"><span>' +
-              (props.mode === 'draw' ? 'Ф' : String(i + 1)) +
+              (props.mode === 'draw'
+                ? 'Ф'
+                : props.mode === 'auto'
+                  ? '★' + String(i + 1)
+                  : String(i + 1)) +
               '</span></div>',
             iconSize: editing ? [44, 44] : [30, 30],
             iconAnchor: editing ? [22, 22] : [15, 15],
@@ -183,7 +208,11 @@ export default function WalkMap(props: Props) {
         }),
         i,
       )
-        .bindTooltip(props.mode === 'draw' ? 'Фініш' : 'Точка ' + (i + 1))
+        .bindTooltip(
+          props.mode === 'draw'
+            ? 'Фініш'
+            : (props.mode === 'auto' ? 'Ваша зупинка ' : 'Точка ') + (i + 1),
+        )
         .addTo(group);
     });
   }, [
@@ -197,6 +226,7 @@ export default function WalkMap(props: Props) {
     props.selectedPoint,
     props.busy,
     props.pickingStart,
+    props.suggestedPoints,
   ]);
   useEffect(() => {
     const L = api.current,
@@ -458,7 +488,9 @@ export default function WalkMap(props: Props) {
           </label>
         </div>
       )}
-      {(props.mode === 'point' || props.mode === 'multi') &&
+      {(props.mode === 'point' ||
+        props.mode === 'multi' ||
+        props.mode === 'auto') &&
         props.start &&
         !props.pickingStart && (
           <div
@@ -473,7 +505,7 @@ export default function WalkMap(props: Props) {
                 onClick={() => props.onPointTool('add')}
               >
                 <Plus size={16} />
-                Точки
+                {props.mode === 'auto' ? 'Зупинки' : 'Точки'}
               </button>
               <button
                 disabled={props.busy}
@@ -495,6 +527,11 @@ export default function WalkMap(props: Props) {
                 <Hand size={16} />
               </button>
             </div>
+            {props.mode === 'auto' && (
+              <span className="point-tool-hint">
+                ★ Ваші зупинки · золоті — додані місця
+              </span>
+            )}
             {props.pointTool === 'edit' && (
               <>
                 <span className="point-tool-hint">
@@ -550,15 +587,19 @@ export default function WalkMap(props: Props) {
             <div className="point-tool-row">
               <button
                 className="active"
-                disabled={props.busy || !props.points.length}
+                disabled={
+                  props.busy || (!props.points.length && props.mode !== 'auto')
+                }
                 onClick={props.onBuild}
               >
                 <Route size={16} />
                 {props.busy
                   ? 'Будуємо…'
-                  : props.walk
-                    ? 'Перебудувати'
-                    : 'Побудувати'}
+                  : props.mode === 'auto'
+                    ? 'Згенерувати ідею'
+                    : props.walk
+                      ? 'Перебудувати'
+                      : 'Побудувати'}
               </button>
               <button
                 disabled={props.busy || !props.points.length}
@@ -628,7 +669,9 @@ export default function WalkMap(props: Props) {
       )}
       {(props.pickingStart ||
         !props.start ||
-        ((props.mode === 'point' || props.mode === 'multi') &&
+        ((props.mode === 'point' ||
+          props.mode === 'multi' ||
+          props.mode === 'auto') &&
           props.pointTool === 'edit' &&
           props.selectedPoint !== null)) && (
         <span className="center-cross" aria-hidden="true">

@@ -37,6 +37,7 @@ import PlannerPanel from './planner-panel';
 import { scenicWalk, clearPlacesCache, type Place } from '@/lib/places';
 import { diagnosticReport } from '@/lib/service';
 import { repeatedRatio } from '@/lib/route-quality';
+import { requiredWalk } from '@/lib/required-walk';
 import {
   DEFAULT_START,
   destination,
@@ -62,6 +63,7 @@ const today = () => new Date().toLocaleDateString('en-CA');
 export default function Planner() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [sketch, setSketch] = useState<Point[]>([]);
+  const [mustVisit, setMustVisit] = useState<Point[]>([]);
   const [precision, setPrecision] = useState<SketchPrecision>('loose');
   const [pointTool, setPointTool] = useState<'add' | 'edit' | 'move'>('add');
   const [selectedPoint, setSelectedPoint] = useState<number | null>(null);
@@ -166,6 +168,7 @@ export default function Planner() {
     setRoutePlaces([]);
   }
   function chooseStart(p: Point, label = 'Обрана точка') {
+    setMustVisit([]);
     setSelectedPoint(null);
     setPointTool('add');
     gpsVersion.current++;
@@ -204,6 +207,7 @@ export default function Planner() {
     );
   }
   function changeMode(value: unknown) {
+    setMustVisit([]);
     setPointTool('add');
     setSelectedPoint(null);
     invalidate();
@@ -256,7 +260,13 @@ export default function Planner() {
     if (busy) return;
     if (pickingStart || !start) return;
     if (mode === 'auto') {
-      setMessage('Натисніть «Запропонувати прогулянку».');
+      if (pointTool !== 'add') return;
+      if (mustVisit.length >= 6) {
+        setMessage('Можна додати до 6 обов’язкових зупинок.');
+        return;
+      }
+      invalidate();
+      setMustVisit([...mustVisit, p]);
       return;
     }
     if (mode === 'draw') return;
@@ -271,6 +281,21 @@ export default function Planner() {
     if (mode === 'point') void build(next);
   }
   function movePoint(index: number, p: Point) {
+    if (mode === 'auto') {
+      if (busy || index < -1 || index >= mustVisit.length) return;
+      const next =
+        index < 0 ? mustVisit : mustVisit.map((q, i) => (i === index ? p : q));
+      invalidate();
+      setMustVisit(next);
+      if (index < 0) {
+        gpsVersion.current++;
+        setGpsBusy(false);
+        setStart(p);
+        setStartLabel('Старт переміщено вручну');
+      }
+      void suggest(next, index < 0 ? p : start);
+      return;
+    }
     if (index < -1 || index >= points.length) return;
     if (busy || (mode !== 'point' && mode !== 'multi')) return;
     const next =
@@ -285,6 +310,14 @@ export default function Planner() {
     if (next.length) void build(next, index < 0 ? p : start);
   }
   function removePoint(index: number) {
+    if (mode === 'auto') {
+      if (busy || index < 0 || index >= mustVisit.length) return;
+      const next = mustVisit.filter((_, i) => i !== index);
+      invalidate();
+      setMustVisit(next);
+      setSelectedPoint(null);
+      return;
+    }
     if (busy || index < 0 || index >= points.length) return;
     const next = points.filter((_, i) => i !== index);
     invalidate();
@@ -292,13 +325,13 @@ export default function Planner() {
     setSelectedPoint(null);
     if (next.length) void build(next);
   }
-  async function suggest() {
+  async function suggest(required = mustVisit, origin = start) {
     setPlacesNotice('');
-    if (!start) {
+    if (!origin) {
       setMessage('Спочатку оберіть старт.');
       return;
     }
-    if (remaining < 300) {
+    if (remaining < 300 && !required.length) {
       setMessage('Ціль уже близько! Збільште ціль для нової прогулянки.');
       return;
     }
@@ -317,9 +350,25 @@ export default function Planner() {
     setPanelOpen(false);
     setRoutePlaces([]);
     try {
+      if (required.length) {
+        const result = await requiredWalk(
+          origin,
+          required,
+          target,
+          ideaStyle,
+          abort.signal,
+          ideaVariation.current++,
+        );
+        if (!abort.signal.aborted) {
+          setWalk(result.walk);
+          setRoutePlaces(result.places);
+          setMessage(result.notice);
+        }
+        return;
+      }
       if (ideaStyle === 'scenic') {
         const result = await scenicWalk(
-          start,
+          origin,
           target,
           abort.signal,
           ideaVariation.current++,
@@ -330,7 +379,7 @@ export default function Planner() {
         if (!abort.signal.aborted) {
           setWalk(result.walk);
           setRoutePlaces(result.places);
-          setPoints([...result.places.map((p) => p.point), start]);
+          setPoints([...result.places.map((p) => p.point), origin]);
           if (Math.abs(result.walk.meters - target) / target > 0.1)
             setMessage(
               'Знайдено прогулянку через цікаві місця. Перевірте різницю з ціллю — точна довжина залежить від доріг.',
@@ -341,13 +390,13 @@ export default function Planner() {
       for (let attempt = 0; attempt < 3; attempt++) {
         abort.signal.throwIfAborted();
         const candidates = [
-          destination(start, radius, bearing + attempt * 20),
-          destination(start, radius, bearing + 110 + attempt * 20),
-          start,
+          destination(origin, radius, bearing + attempt * 20),
+          destination(origin, radius, bearing + 110 + attempt * 20),
+          origin,
         ];
         try {
           const route = await walkingRoute(
-            [start, ...candidates],
+            [origin, ...candidates],
             abort.signal,
           );
           if (
@@ -563,6 +612,13 @@ export default function Planner() {
             </div>
           </Tabs>
           {mode === 'auto' && (
+            <p className="notice">
+              Додайте на карті до 6 зупинок, які хочете відвідати. Порядок — як
+              додавали; повернення до старту включено. Обрано:{' '}
+              {mustVisit.length}.
+            </p>
+          )}
+          {mode === 'auto' && (
             <Tabs
               value={ideaStyle}
               onValueChange={(v) => {
@@ -607,7 +663,7 @@ export default function Planner() {
               {drawing ? 'Готово, переміщувати карту' : 'Малювати на карті'}
             </button>
           )}
-          {points.length > 0 && (
+          {points.length > 0 && mode !== 'auto' && (
             <div className="route-edit">
               <span>
                 {mode === 'draw' ? 'Ескіз готовий' : `Точок: ${points.length}`}
@@ -771,14 +827,16 @@ export default function Planner() {
         </PlannerPanel>
         <div className="map-area">
           <WalkMap
+            suggestedPoints={routePlaces.map((p) => p.point)}
             pointTool={pointTool}
             selectedPoint={selectedPoint}
             onPointTool={setPointTool}
             onSelectPoint={setSelectedPoint}
             onMovePoint={movePoint}
             onRemovePoint={removePoint}
-            onBuild={() => void build()}
+            onBuild={() => (mode === 'auto' ? void suggest() : void build())}
             onClearPoints={() => {
+              if (mode === 'auto') setMustVisit([]);
               invalidate();
               setPoints([]);
               setSelectedPoint(null);
@@ -789,7 +847,7 @@ export default function Planner() {
               if (sketch.length) void build(points, start, sketch, value);
             }}
             start={start}
-            points={points}
+            points={mode === 'auto' ? mustVisit : points}
             walk={shownWalk}
             drawing={drawing}
             pickingStart={pickingStart}

@@ -11,7 +11,7 @@
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt",
-    "test": "node --experimental-strip-types --test scripts/route.test.ts scripts/places.test.ts scripts/reliability.test.ts",
+    "test": "node --experimental-strip-types --test scripts/route.test.ts scripts/places.test.ts scripts/reliability.test.ts scripts/required-walk.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
