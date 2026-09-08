@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { scaleShape, trimWalk, resizeWalk } from '../lib/resize-walk.ts';
 import { sketchLength, withReturn, type Point } from '../lib/route.ts';
+import type { Place } from '../lib/places.ts';
 const a: Point = [50, 30],
   b: Point = [50.002, 30],
   c: Point = [50.002, 30.003];
@@ -51,6 +52,40 @@ void test('shorter free sketch moves finish without a service call', async () =>
   assert.equal(result.walk.meters, 300);
   assert.equal(routed[0], a);
   assert.ok(distanceFrom(a, routed.at(-1)!) < distanceFrom(a, c));
+});
+void test('draw resizing uses the original sketch with soft guides and keeps reachable scenic places', async () => {
+  const park: Place = {
+    id: 'way/1',
+    name: 'Сквер',
+    kind: 'Парк / сквер',
+    point: [50.001, 30.001],
+    priority: 3,
+  };
+  const originalShape: Point[] = [a, park.point, c];
+  let received: Point[] = [];
+  const result = await resizeWalk(
+    { ...options, mode: 'draw', shape: originalShape, target: 800 },
+    signal(),
+    {
+      route: async () => {
+        throw Error('unused');
+      },
+      sketch: async (_start, shape) => {
+        received = shape;
+        return { points: shape, meters: 800, seconds: 600 };
+      },
+      places: async () => [park],
+      scenic: async () => {
+        throw Error('unused');
+      },
+      required: async () => {
+        throw Error('unused');
+      },
+    },
+  );
+  assert.ok(received.length >= originalShape.length);
+  assert.notDeepEqual(received, base.points);
+  assert.deepEqual(result.places, [park]);
 });
 void test('shape scaling keeps the start fixed and changes every bend proportionally', () => {
   const scaled = scaleShape([a, b, c], 2);

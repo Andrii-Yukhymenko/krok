@@ -71,6 +71,8 @@ export default function Planner() {
     walk: Walk;
     places: Place[];
     required: Point[];
+    shape: Point[];
+    steps: number;
   } | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [sketch, setSketch] = useState<Point[]>([]);
@@ -137,6 +139,8 @@ export default function Planner() {
         walk,
         places: routePlaces,
         required: mode === 'auto' ? mustVisit : points,
+        shape: sketch,
+        steps: Math.max(200, Math.round(steps / 100) * 100),
       };
     const snapshot = resizeBase.current;
     if (resizeTimer.current) clearTimeout(resizeTimer.current);
@@ -146,6 +150,14 @@ export default function Planner() {
     setResizeTarget(value);
     setResizing(true);
     setMessage('');
+    if (value === snapshot.steps) {
+      setWalk(snapshot.walk);
+      setRoutePlaces(snapshot.places);
+      if (mode !== 'auto' && mode !== 'draw') setPoints(snapshot.required);
+      setResizing(false);
+      setMessage('Повернуто початковий маршрут.');
+      return;
+    }
     resizeTimer.current = setTimeout(async () => {
       const multiplier = back && mode !== 'auto' ? 2 : 1;
       try {
@@ -157,6 +169,8 @@ export default function Planner() {
             mode,
             style: ideaStyle,
             target: (value * stride) / 100 / multiplier,
+            shape: snapshot.shape,
+            precision,
           },
           abort.signal,
         );
@@ -895,7 +909,7 @@ export default function Planner() {
                 {lengthControl}
                 <p className="length-help">
                   {mode === 'draw'
-                    ? 'Скорочення ескізу зміщує фініш. Подовження може додати відрізок туди й назад.'
+                    ? 'Контур змінюється цілісно; короткі тупики відсіюються, а подовження шукає парки й прогулянкові місця поруч.'
                     : 'Зупинки зберігаються. Бажана довжина може бути недосяжною.'}
                 </p>
                 {routePlaces.length > 0 && (

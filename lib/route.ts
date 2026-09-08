@@ -463,16 +463,34 @@ export function cleanSketchSpurs(walk: Walk, sketch: Point[]): Walk {
     let length = 0;
     for (let j = i + 1; j < points.length - 1; j++) {
       length += distance(points[j - 1], points[j]);
-      if (length > 350) break;
-      if (points[i][0] !== points[j][0] || points[i][1] !== points[j][1])
+      if (length > 600) break;
+      // Directions returned for the same pavement can differ by a few metres.
+      // Treat only very close, symmetric returns as a spur; this still avoids
+      // connecting separate nearby streets across a wall or building.
+      if (distance(points[i], points[j]) > 3)
         continue;
       const branch = points.slice(i, j + 1);
       const symmetric = branch.every(
-        (p, k) => distance(p, branch[branch.length - 1 - k]) < 0.2,
-      );
+          (p, k) => distance(p, branch[branch.length - 1 - k]) < 8,
+        ),
+        seen = new Set<string>();
+      let branchLength = 0,
+        retraced = 0;
+      for (let k = 1; k < branch.length; k++) {
+        const key = [branch[k - 1], branch[k]]
+          .map((p) => p.map((n) => n.toFixed(5)).join(','))
+          .sort()
+          .join('|');
+        const segment = distance(branch[k - 1], branch[k]);
+        branchLength += segment;
+        if (seen.has(key)) retraced += segment;
+        seen.add(key);
+      }
+      const followsSamePath =
+        symmetric || (branchLength > 0 && retraced / branchLength > 0.35);
       const tip = branch[Math.floor(branch.length / 2)];
       // Preserve a deliberate excursion drawn toward its turning point.
-      if (!symmetric || sketch.some((p) => distance(p, tip) < 35)) break;
+      if (!followsSamePath || sketch.some((p) => distance(p, tip) < 35)) break;
       points.splice(i + 1, j - i);
       removed += length;
       i--;

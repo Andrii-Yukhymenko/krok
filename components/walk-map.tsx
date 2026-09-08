@@ -129,11 +129,15 @@ export default function WalkMap(props: Props) {
       return marker;
     };
     group.clearLayers();
-    if (props.mode === 'auto' && props.walk)
+    if ((props.mode === 'auto' || props.mode === 'draw') && props.walk)
       props.suggestedPoints.forEach((p, i) => {
+        const label =
+          props.mode === 'auto'
+            ? 'Додане генератором місце '
+            : 'Прогулянкове місце ';
         L.marker(p, {
-          title: 'Додане місце ' + (i + 1),
-          alt: 'Додане генератором місце ' + (i + 1),
+          title: label + (i + 1),
+          alt: label + (i + 1),
           zIndexOffset: 200,
           icon: L.divIcon({
             className: 'map-pin-icon idea-pin-icon',
@@ -144,8 +148,8 @@ export default function WalkMap(props: Props) {
             popupAnchor: [0, -40],
           }),
         })
-          .bindTooltip('Додане генератором місце ' + (i + 1))
-          .bindPopup('Місце ' + (i + 1) + ', додане генератором до прогулянки.')
+          .bindTooltip(label + (i + 1))
+          .bindPopup(label + (i + 1) + ', додане до прогулянки.')
           .addTo(group);
       });
     if (!props.walk && props.points.length && props.start)

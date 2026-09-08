@@ -31,6 +31,9 @@ void test('short accidental retrace is removed without shortcuts or inflated dis
   assert.deepEqual(result.points, [a, b, d]);
   assert.ok(result.meters < 360 && result.seconds < 300);
   assert.equal(cleanSketchSpurs(walk, [a, b, c, b, d]), walk);
+  const nearB: Point = [b[0] + 0.000015, b[1]];
+  const fuzzy = { ...walk, points: [a, b, c, nearB, d] };
+  assert.deepEqual(cleanSketchSpurs(fuzzy, [a, b, d]).points, [a, b, d]);
   const loop = { ...walk, points: [a, b, c, d, b, a] };
   assert.equal(cleanSketchSpurs(loop, [a, d, a]), loop);
   const returning = { ...walk, points: [a, b, c, b, a] };

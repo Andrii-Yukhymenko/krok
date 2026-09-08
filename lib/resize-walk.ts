@@ -1,15 +1,19 @@
 import {
+  cleanSketchSpurs,
   distance,
   destination,
   sampleSketch,
+  sketchRoute,
   sketchLength,
   walkingRoute,
   withReturn,
   type Point,
+  type SketchPrecision,
   type Walk,
 } from './route.ts';
-import { scenicWalk, type Place } from './places.ts';
+import { nearbyPlaces, scenicWalk, type Place } from './places.ts';
 import { requiredWalk } from './required-walk.ts';
+import { repeatedRatio, routeScore } from './route-quality.ts';
 type Options = {
   base: Walk;
   start: Point;
@@ -17,12 +21,21 @@ type Options = {
   mode: string;
   style: string;
   target: number;
+  shape?: Point[];
+  precision?: SketchPrecision;
 };
 type Result = {
   walk: Walk;
   places: Place[];
   notice: string;
   waypoints?: Point[];
+};
+type Dependencies = {
+  route: typeof walkingRoute;
+  scenic: typeof scenicWalk;
+  required: typeof requiredWalk;
+  sketch?: typeof sketchRoute;
+  places?: typeof nearbyPlaces;
 };
 
 // Cut along existing route segments only; never draw a shortcut across terrain.
@@ -52,17 +65,63 @@ export function trimWalk(walk: Walk, target: number): Walk {
 
 // Keep the start fixed and scale every bend by the same amount. Closed shapes
 // stay closed, while rectangles, circles and other sketches retain their form.
-export function scaleShape(points: Point[], factor: number): Point[] {
+export function scaleShape(
+  points: Point[],
+  factor: number,
+  origin = points[0],
+): Point[] {
   if (!points.length) return [];
-  const origin = points[0];
-  return points.map((point, index) =>
-    index === 0
+  return points.map((point) =>
+    point === origin
       ? origin
       : [
           origin[0] + (point[0] - origin[0]) * factor,
           origin[1] + (point[1] - origin[1]) * factor,
         ],
   );
+}
+
+function scenicGuide(shape: Point[], places: Place[], maxDetour: number) {
+  const ranked = places
+    .map((place) => {
+      let index = 0,
+        detour = Infinity;
+      for (let candidate = 0; candidate < shape.length - 1; candidate++) {
+        const d =
+          distance(shape[candidate], place.point) +
+          distance(place.point, shape[candidate + 1]) -
+          distance(shape[candidate], shape[candidate + 1]);
+        if (d < detour) {
+          detour = d;
+          index = candidate;
+        }
+      }
+      return { place, index, detour };
+    })
+    .filter(
+      ({ place, detour }) =>
+        detour <= maxDetour && distance(shape[0], place.point) > 75,
+    )
+    .sort(
+      (a, b) =>
+        a.detour -
+        a.place.priority * 60 -
+        (b.detour - b.place.priority * 60),
+    );
+  const selected: typeof ranked = [];
+  for (const candidate of ranked) {
+    if (
+      selected.length >= 2 ||
+      selected.some(({ place }) => distance(place.point, candidate.place.point) < 250)
+    )
+      continue;
+    selected.push(candidate);
+  }
+  const guide = [...shape];
+  selected
+    .sort((a, b) => b.index - a.index)
+    .forEach(({ place, index }) => guide.splice(index + 1, 0, place.point));
+  return { guide, places: selected.map(({ place }) => place) };
 }
 
 function bearing(a: Point, b: Point) {
@@ -112,25 +171,69 @@ function terminalWaypoints(
 
 async function resizeSketch(
   base: Walk,
+  start: Point,
+  source: Point[],
   target: number,
+  precision: SketchPrecision,
   signal: AbortSignal,
-  route: typeof walkingRoute,
-): Promise<Walk> {
+  deps: {
+    route: typeof walkingRoute;
+    sketch?: typeof sketchRoute;
+    places?: typeof nearbyPlaces;
+  },
+): Promise<{ walk: Walk; places: Place[] }> {
+  const contour = source.length >= 2 ? source : base.points;
   let factor = target / base.meters,
-    best = base;
+    best = base,
+    bestPlaces: Place[] = [];
+  let places: Place[] = [];
+  if (target > base.meters + 100 && deps.places)
+    try {
+      places = await deps.places(start, target, signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
+    }
   for (let attempt = 0; attempt < 3; attempt++) {
     signal.throwIfAborted();
-    const shape = scaleShape(base.points, factor);
-    const anchors = sampleSketch(
-      shape,
-      18,
-      Math.max(8, sketchLength(shape) / 600),
-    );
+    const scaled = scaleShape(contour, factor, start),
+      simplified = sampleSketch(
+        scaled,
+        8,
+        precision === 'loose' ? 100 : 50,
+      ),
+      enriched = scenicGuide(
+        simplified,
+        places,
+        Math.max(250, Math.min(650, (target - base.meters) * 0.65)),
+      );
     try {
-      const candidate = await route(anchors, signal);
+      const candidate = cleanSketchSpurs(
+        deps.sketch
+          ? await deps.sketch(
+              start,
+              enriched.guide,
+              signal,
+              precision === 'loose' ? 'loose' : 'balanced',
+            )
+          : await deps.route(
+              sampleSketch(
+                enriched.guide,
+                8,
+                precision === 'loose' ? 100 : 50,
+              ),
+              signal,
+            ),
+        enriched.places.map((place) => place.point),
+      );
       signal.throwIfAborted();
-      if (Math.abs(candidate.meters - target) < Math.abs(best.meters - target))
+      const score = (walk: Walk) =>
+        routeScore(walk, target) + repeatedRatio(walk) * 1.2;
+      if (score(candidate) < score(best)) {
         best = candidate;
+        bestPlaces = enriched.places.filter((place) =>
+          candidate.points.some((point) => distance(point, place.point) <= 150),
+        );
+      }
       if (Math.abs(best.meters - target) / target < 0.05) break;
       factor *= Math.max(0.55, Math.min(1.8, target / candidate.meters));
     } catch (error) {
@@ -138,7 +241,7 @@ async function resizeSketch(
       factor *= 0.85;
     }
   }
-  return best;
+  return { walk: best, places: bestPlaces };
 }
 
 async function extendFromFinish(
@@ -197,9 +300,25 @@ async function extendFromFinish(
 export async function resizeWalk(
   options: Options,
   signal: AbortSignal,
-  deps = { route: walkingRoute, scenic: scenicWalk, required: requiredWalk },
+  deps?: Dependencies,
 ): Promise<Result> {
-  const { base, start, required, mode, style, target } = options;
+  const {
+    base,
+    start,
+    required,
+    mode,
+    style,
+    target,
+    shape = base.points,
+    precision = 'balanced',
+  } = options;
+  const runtime = {
+    route: deps?.route ?? walkingRoute,
+    scenic: deps?.scenic ?? scenicWalk,
+    required: deps?.required ?? requiredWalk,
+    sketch: deps ? deps.sketch : sketchRoute,
+    places: deps ? deps.places : nearbyPlaces,
+  };
   if (!Number.isFinite(target) || target < 25 || target > 50000)
     throw new Error('Оберіть довжину від 25 м до 50 км.');
   signal.throwIfAborted();
@@ -207,24 +326,34 @@ export async function resizeWalk(
     return { walk: base, places: [], notice: '' };
   if (mode === 'auto') {
     if (required.length)
-      return deps.required(start, required, target, style, signal);
+      return runtime.required(start, required, target, style, signal);
     if (style === 'scenic') {
       let notice = '';
-      const result = await deps.scenic(start, target, signal, 0, (n) => {
+      const result = await runtime.scenic(start, target, signal, 0, (n) => {
         notice = n;
       });
       return { ...result, notice };
     }
   }
   if (mode === 'draw') {
-    const resized = await resizeSketch(base, target, signal, deps.route);
+    const resized = await resizeSketch(
+      base,
+      start,
+      shape,
+      target,
+      precision,
+      signal,
+      runtime,
+    );
     return {
-      walk: resized,
-      places: [],
+      walk: resized.walk,
+      places: resized.places,
       notice:
-        resized === base
+        resized.walk === base
           ? 'Не вдалося підігнати контур до доріг. Попередній маршрут залишено.'
-          : 'Контур рівномірно змінено від старту зі збереженням його форми.',
+          : resized.places.length
+            ? 'Контур змінено без тупикових відхилень і проведено біля прогулянкових місць.'
+            : 'Контур плавно змінено від старту; короткі тупикові відхилення прибрано.',
     };
   }
   if ((mode === 'point' || mode === 'multi') && target < base.meters) {
@@ -243,7 +372,7 @@ export async function resizeWalk(
       mode,
       target,
       signal,
-      deps.route,
+      runtime.route,
     );
     return {
       ...extended,
@@ -262,7 +391,7 @@ export async function resizeWalk(
         places: [],
         notice: 'Коротший варіант повертається тією самою дорогою до старту.',
       };
-    best = await deps.route([start, ...required], signal);
+    best = await runtime.route([start, ...required], signal);
     signal.throwIfAborted();
     if (required.some((p) => !best.points.some((q) => distance(p, q) <= 100)))
       throw new Error(
@@ -290,7 +419,7 @@ export async function resizeWalk(
     const pivot = original.points[index];
     const extra = destination(pivot, radius, 40 + attempt * 120);
     try {
-      const loop = await deps.route([pivot, extra, pivot], signal);
+      const loop = await runtime.route([pivot, extra, pivot], signal);
       signal.throwIfAborted();
       if (
         distance(loop.points[0], pivot) > 5 ||
