@@ -24,6 +24,7 @@ import {
 import { directionLane, directionArrows } from '@/lib/route-display';
 
 type Props = {
+  lockViewport: boolean;
   suggestedPoints: Point[];
   pointTool: 'add' | 'edit' | 'move';
   selectedPoint: number | null;
@@ -315,6 +316,7 @@ export default function WalkMap(props: Props) {
     if (
       ready &&
       props.walk &&
+      !props.lockViewport &&
       props.mode !== 'draw' &&
       props.pointTool !== 'edit'
     )
@@ -322,7 +324,7 @@ export default function WalkMap(props: Props) {
         padding: [50, 60],
         maxZoom: 16,
       });
-  }, [ready, props.walk, props.mode, props.pointTool]);
+  }, [ready, props.walk, props.mode, props.pointTool, props.lockViewport]);
   useEffect(() => {
     const m = map.current,
       el = container.current,

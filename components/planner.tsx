@@ -38,6 +38,8 @@ import { scenicWalk, clearPlacesCache, type Place } from '@/lib/places';
 import { diagnosticReport } from '@/lib/service';
 import { repeatedRatio } from '@/lib/route-quality';
 import { requiredWalk } from '@/lib/required-walk';
+import { resizeWalk } from '@/lib/resize-walk';
+import RouteLengthControl from './route-length-control';
 import {
   DEFAULT_START,
   destination,
@@ -61,6 +63,11 @@ const coords = (p: Point) => p.map((n) => n.toFixed(4)).join(', ');
 const today = () => new Date().toLocaleDateString('en-CA');
 
 export default function Planner() {
+  const [resizeTarget, setResizeTarget] = useState<number | null>(null);
+  const [resizing, setResizing] = useState(false);
+  const resizeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resizeAbort = useRef<AbortController | null>(null);
+  const resizeBase = useRef<{ walk: Walk; places: Place[] } | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [sketch, setSketch] = useState<Point[]>([]);
   const [mustVisit, setMustVisit] = useState<Point[]>([]);
@@ -103,6 +110,96 @@ export default function Planner() {
       [walk, back, mode],
     ),
     steps = shownWalk ? stepsFor(shownWalk.meters, stride) : 0;
+  function cancelResize() {
+    if (resizeTimer.current) clearTimeout(resizeTimer.current);
+    resizeTimer.current = null;
+    resizeAbort.current?.abort();
+    resizeAbort.current = null;
+    resizeBase.current = null;
+    setResizing(false);
+    setResizeTarget(null);
+  }
+  useEffect(
+    () => () => {
+      if (resizeTimer.current) clearTimeout(resizeTimer.current);
+      resizeAbort.current?.abort();
+    },
+    [],
+  );
+  function changeLength(value: number) {
+    if (!walk || !start || busy) return;
+    if (!resizeBase.current) resizeBase.current = { walk, places: routePlaces };
+    const snapshot = resizeBase.current;
+    if (resizeTimer.current) clearTimeout(resizeTimer.current);
+    resizeAbort.current?.abort();
+    const abort = new AbortController();
+    resizeAbort.current = abort;
+    setResizeTarget(value);
+    setResizing(true);
+    setMessage('');
+    resizeTimer.current = setTimeout(async () => {
+      const multiplier = back && mode !== 'auto' ? 2 : 1;
+      try {
+        const result = await resizeWalk(
+          {
+            base: snapshot.walk,
+            start,
+            required: mode === 'auto' ? mustVisit : points,
+            mode,
+            style: ideaStyle,
+            target: (value * stride) / 100 / multiplier,
+          },
+          abort.signal,
+        );
+        if (abort.signal.aborted) return;
+        setWalk(result.walk);
+        setRoutePlaces(
+          result.walk === snapshot.walk ? snapshot.places : result.places,
+        );
+        const actual = stepsFor(result.walk.meters * multiplier, stride);
+        setMessage(
+          [
+            result.notice,
+            Math.abs(actual - value) / value > 0.1
+              ? `Бажано ${fmt(value)}, знайдено ≈ ${fmt(actual)} кроків.`
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' '),
+        );
+      } catch (error) {
+        if (!abort.signal.aborted)
+          setMessage(
+            (error instanceof Error
+              ? error.message
+              : 'Не вдалося змінити довжину.') + ' Поточний маршрут залишено.',
+          );
+      } finally {
+        if (resizeAbort.current === abort) setResizing(false);
+      }
+    }, 900);
+  }
+  const lengthControl = shownWalk && (
+    <RouteLengthControl
+      value={resizeTarget ?? Math.max(200, Math.round(steps / 100) * 100)}
+      actual={steps}
+      max={Math.max(
+        20000,
+        Math.ceil(
+          (stepsFor(
+            (resizeBase.current?.walk.meters ?? walk!.meters) *
+              (back && mode !== 'auto' ? 2 : 1),
+            stride,
+          ) *
+            1.75) /
+            1000,
+        ) * 1000,
+      )}
+      pending={resizing}
+      onChange={changeLength}
+      onCancel={cancelResize}
+    />
+  );
   useEffect(() => {
     queueMicrotask(() => {
       try {
@@ -159,6 +256,7 @@ export default function Planner() {
       }
   }, [height, goal, done, loaded]);
   function invalidate() {
+    cancelResize();
     setPlacesNotice('');
     controller.current?.abort();
     controller.current = null;
@@ -223,6 +321,7 @@ export default function Planner() {
     trace = sketch,
     accuracy = precision,
   ) {
+    cancelResize();
     if (!origin) {
       setMessage('Спочатку оберіть старт.');
       return;
@@ -326,6 +425,7 @@ export default function Planner() {
     if (next.length) void build(next);
   }
   async function suggest(required = mustVisit, origin = start) {
+    cancelResize();
     setPlacesNotice('');
     if (!origin) {
       setMessage('Спочатку оберіть старт.');
@@ -642,7 +742,10 @@ export default function Planner() {
               <Switch
                 id="return-switch"
                 checked={back}
-                onCheckedChange={setBack}
+                onCheckedChange={(value) => {
+                  cancelResize();
+                  setBack(value);
+                }}
                 aria-label="Повернутися тим самим шляхом"
               />
             </label>
@@ -778,6 +881,12 @@ export default function Planner() {
                     {Math.round(shownWalk.seconds / 60)} хв
                   </span>
                 </div>
+                {lengthControl}
+                <p className="length-help">
+                  {mode === 'draw'
+                    ? 'Скорочення ескізу зміщує фініш. Подовження може додати відрізок туди й назад.'
+                    : 'Зупинки зберігаються. Бажана довжина може бути недосяжною.'}
+                </p>
                 {routePlaces.length > 0 && (
                   <div className="route-places">
                     <p>
@@ -827,6 +936,7 @@ export default function Planner() {
         </PlannerPanel>
         <div className="map-area">
           <WalkMap
+            lockViewport={resizeTarget !== null}
             suggestedPoints={routePlaces.map((p) => p.point)}
             pointTool={pointTool}
             selectedPoint={selectedPoint}
@@ -851,7 +961,7 @@ export default function Planner() {
             walk={shownWalk}
             drawing={drawing}
             pickingStart={pickingStart}
-            busy={busy}
+            busy={busy || resizing}
             mode={mode}
             sketch={sketch}
             onToggleDrawing={() => {
@@ -879,6 +989,9 @@ export default function Planner() {
             onError={setMessage}
           />
           <div className="mobile-map-dock">
+            {shownWalk && (
+              <div className="mobile-length-control">{lengthControl}</div>
+            )}
             <div className="mobile-route-summary" aria-live="polite">
               <strong>
                 {busy
@@ -944,6 +1057,7 @@ export default function Planner() {
             goal={goal}
             done={done}
             onSave={(profile) => {
+              cancelResize();
               setHeight(profile.height);
               setGoal(profile.goal);
               setDone(profile.done);

@@ -1476,3 +1476,44 @@ h1 span {
   outline: 3px solid #223ba0;
   outline-offset: 3px;
 }
+.route-length-control {
+  padding: 12px 0 4px;
+  border-top: 1px solid #c8d9ce;
+  margin-top: 12px;
+}
+.route-length-heading,
+.route-length-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px 10px;
+  font-size: 14px;
+}
+.route-length-heading strong {
+  color: #175a46;
+}
+.route-length-control input[type='range'] {
+  display: block;
+  width: 100%;
+  min-height: 38px;
+  accent-color: #175a46;
+  cursor: pointer;
+}
+.route-length-caption {
+  color: #52645b;
+  min-height: 24px;
+}
+.length-help {
+  font-size: 13px;
+  color: #52645b;
+  margin: 8px 0;
+}
+.mobile-length-control {
+  grid-column: 1 / -1;
+}
+.mobile-length-control .route-length-control {
+  padding: 0;
+  border: 0;
+  margin: 0;
+}
