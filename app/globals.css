@@ -1520,3 +1520,7 @@ h1 span {
 
 .erase-tools { display: flex; flex-direction: column; gap: 8px; width: 100%; }
 .erase-tools .point-tool-hint { max-width: 310px; white-space: normal; }
+.is-erasing .map-canvas { cursor: none; touch-action: none; }
+.brush-cursor { position: absolute; top: 0; left: 0; display: none; z-index: 500; border: 2px solid #b63646; background: #f26a7b24; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 1px #fff; }
+.brush-size { display:flex; gap:10px; align-items:center; font-size:14px; padding:3px 5px; }
+.brush-size input { min-width:80px; width:100%; accent-color:#16634e; }

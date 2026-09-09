@@ -23,14 +23,20 @@ import {
   type Walk,
   type SketchPrecision,
 } from '@/lib/route';
+import {
+  brushSamples,
+  brushRanges,
+  remainingLines,
+  segmentDistance,
+  type BrushEdit,
+} from '@/lib/brush-erase';
 import { isPoint } from '@/lib/session';
 import { directionLane, directionArrows } from '@/lib/route-display';
 
 type Props = {
   erasing: boolean;
-  eraseAnchor: Point | null;
   editableWalk: Walk | null;
-  onEraseAt: (index: number) => void;
+  onEraseStroke: (edit: BrushEdit) => Promise<void>;
   onToggleEraser: () => void;
   canUndoErase: boolean;
   onUndoErase: () => void;
@@ -73,6 +79,10 @@ export default function WalkMap(props: Props) {
   }, [props]);
   const skipInitialStart = useRef(false),
     skipInitialFit = useRef(false);
+  const brushCursor = useRef<HTMLDivElement>(null);
+  const [brushRadius, setBrushRadius] = useState(28);
+  const [erasePreview, setErasePreview] = useState<Point[][] | null>(null);
+  const [brushing, setBrushing] = useState(false);
   const [ready, setReady] = useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -131,22 +141,7 @@ export default function WalkMap(props: Props) {
           .addTo(m);
         layers.current = L.layerGroup().addTo(m);
         m.on('click', (e) => {
-          if (latest.current.erasing) {
-            if (latest.current.busy || !latest.current.editableWalk) return;
-            const hit = m.latLngToContainerPoint(e.latlng);
-            let nearest = -1,
-              best = 32;
-            latest.current.editableWalk.points.forEach((p, i) => {
-              const d = m.latLngToContainerPoint(p).distanceTo(hit);
-              if (d < best) {
-                nearest = i;
-                best = d;
-              }
-            });
-            if (nearest >= 0) latest.current.onEraseAt(nearest);
-            else latest.current.onError('Торкніться ближче до лінії маршруту.');
-            return;
-          }
+          if (latest.current.erasing) return;
           if (
             !latest.current.drawing &&
             !latest.current.pickingStart &&
@@ -318,6 +313,21 @@ export default function WalkMap(props: Props) {
     const route = L.layerGroup().addTo(m);
     const draw = () => {
       route.clearLayers();
+      if (erasePreview) {
+        L.polyline(erasePreview, {
+          interactive: false,
+          color: '#fff',
+          weight: 8,
+          smoothFactor: 0,
+        }).addTo(route);
+        L.polyline(erasePreview, {
+          interactive: false,
+          color: '#16634e',
+          weight: 5,
+          smoothFactor: 0,
+        }).addTo(route);
+        return;
+      }
       const lane = directionLane(
         props.walk!.points.map((p) => m.latLngToLayerPoint(p)),
       );
@@ -365,7 +375,7 @@ export default function WalkMap(props: Props) {
       m.off('zoomend moveend resize', draw);
       route.remove();
     };
-  }, [ready, props.walk]);
+  }, [ready, props.walk, erasePreview]);
   useEffect(() => {
     if (!ready || !container.current) return;
     const observer = new ResizeObserver(() =>
@@ -519,21 +529,134 @@ export default function WalkMap(props: Props) {
     };
   }, [ready, props.drawing]);
   useEffect(() => {
-    if (!ready || !map.current || !api.current || !props.eraseAnchor) return;
-    const marker = api.current
-      .circleMarker(props.eraseAnchor, {
-        radius: 10,
-        color: '#ba3d37',
-        fillColor: '#fff',
-        fillOpacity: 1,
-        weight: 3,
-        interactive: false,
-      })
-      .addTo(map.current);
-    return () => {
-      marker.remove();
+    const m = map.current,
+      el = container.current;
+    if (!ready || !m || !el || !props.erasing) return;
+    m.dragging.disable();
+    m.doubleClickZoom.disable();
+    m.touchZoom.disable();
+    const cursorElement = brushCursor.current;
+    let active: number | null = null,
+      pending = false,
+      disposed = false;
+    let points: Point[] = [],
+      pixels: { x: number; y: number }[] = [],
+      hits = new Set<number>();
+    let baseWalk: Walk | null = null;
+    let previous: { x: number; y: number } | null = null;
+    const cursor = (event: PointerEvent) => {
+      const p = m.mouseEventToContainerPoint(event);
+      if (brushCursor.current) {
+        brushCursor.current.style.display = 'block';
+        brushCursor.current.style.transform = `translate(${p.x}px, ${p.y}px)`;
+      }
+      return p;
     };
-  }, [ready, props.eraseAnchor]);
+    const paint = (event: PointerEvent) => {
+      const p = cursor(event);
+      if (active !== event.pointerId || pending) return;
+      event.preventDefault();
+      const from = previous ?? p;
+      pixels.forEach((q, i) => {
+        if (segmentDistance(q, from, p) <= brushRadius + 3) hits.add(i);
+      });
+      previous = p;
+      setErasePreview(remainingLines(points, brushRanges(hits, points.length)));
+    };
+    const down = (event: PointerEvent) => {
+      if (
+        active !== null ||
+        pending ||
+        latest.current.busy ||
+        event.button !== 0 ||
+        !latest.current.editableWalk
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      active = event.pointerId;
+      baseWalk = latest.current.editableWalk;
+      points = brushSamples(baseWalk.points, (p) =>
+        m.latLngToContainerPoint(p),
+      );
+      pixels = points.map((p) => m.latLngToContainerPoint(p));
+      hits = new Set();
+      previous = null;
+      el.setPointerCapture(event.pointerId);
+      setBrushing(true);
+      paint(event);
+    };
+    const finish = async (event: PointerEvent) => {
+      if (active !== event.pointerId) return;
+      if (event.type !== 'pointercancel') paint(event);
+      active = null;
+      setBrushing(false);
+      if (el.hasPointerCapture(event.pointerId))
+        el.releasePointerCapture(event.pointerId);
+      if (brushCursor.current && event.pointerType === 'touch')
+        brushCursor.current.style.display = 'none';
+      const ranges = brushRanges(hits, points.length);
+      if (
+        event.type === 'pointercancel' ||
+        !ranges.length ||
+        !baseWalk ||
+        latest.current.editableWalk !== baseWalk
+      ) {
+        setErasePreview(null);
+        return;
+      }
+      pending = true;
+      try {
+        await latest.current.onEraseStroke({
+          walk: { ...baseWalk, points },
+          ranges,
+        });
+      } finally {
+        pending = false;
+        if (!disposed) setErasePreview(null);
+      }
+    };
+    const leave = () => {
+      if (active === null && brushCursor.current)
+        brushCursor.current.style.display = 'none';
+    };
+    const cancelStroke = () => {
+      if (active === null) return;
+      const pointer = active;
+      active = null;
+      if (el.hasPointerCapture(pointer)) el.releasePointerCapture(pointer);
+      setBrushing(false);
+      setErasePreview(null);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') cancelStroke();
+    };
+    window.addEventListener('keydown', escape);
+    window.addEventListener('blur', cancelStroke);
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointermove', paint);
+    el.addEventListener('pointerup', finish);
+    el.addEventListener('pointercancel', finish);
+    el.addEventListener('pointerleave', leave);
+    return () => {
+      disposed = true;
+      if (active !== null && el.hasPointerCapture(active))
+        el.releasePointerCapture(active);
+      el.removeEventListener('pointerdown', down);
+      window.removeEventListener('keydown', escape);
+      window.removeEventListener('blur', cancelStroke);
+      el.removeEventListener('pointermove', paint);
+      el.removeEventListener('pointerup', finish);
+      el.removeEventListener('pointercancel', finish);
+      el.removeEventListener('pointerleave', leave);
+      m.dragging.enable();
+      m.doubleClickZoom.enable();
+      m.touchZoom.enable();
+      if (cursorElement) cursorElement.style.display = 'none';
+      setErasePreview(null);
+      setBrushing(false);
+    };
+  }, [ready, props.erasing, brushRadius]);
   const eraseTools = props.walk && (
     <div className="erase-tools">
       <div className="point-tool-row">
@@ -557,12 +680,26 @@ export default function WalkMap(props: Props) {
         )}
       </div>
       {props.erasing && (
-        <output className="point-tool-hint">
-          {props.eraseAnchor
-            ? 'Торкніться кінця зайвої ділянки.'
-            : 'Торкніться початку зайвої ділянки.'}{' '}
-          З’єднаємо пішохідним шляхом.
-        </output>
+        <>
+          <label className="brush-size">
+            Розмір{' '}
+            <input
+              type="range"
+              min="14"
+              max="60"
+              step="2"
+              value={brushRadius}
+              disabled={props.busy || brushing}
+              onChange={(e) => setBrushRadius(Number(e.target.value))}
+              aria-label="Розмір стирачки"
+            />
+          </label>
+          <output className="point-tool-hint">
+            {props.busy
+              ? 'З’єднуємо маршрут в обхід стертої дороги…'
+              : 'Затисніть і проводьте по лінії. Відпустіть — маршрут з’єднається.'}
+          </output>
+        </>
       )}
     </div>
   );
@@ -571,11 +708,25 @@ export default function WalkMap(props: Props) {
       className={
         'map-panel ' +
         (props.drawing ? 'is-drawing' : '') +
+        (props.erasing ? ' is-erasing' : '') +
         (props.pickingStart ? ' picking-start' : '')
       }
       aria-label="Карта маршруту"
     >
       <div className="map-canvas" ref={container} />
+      {props.erasing && (
+        <div
+          ref={brushCursor}
+          className="brush-cursor"
+          aria-hidden="true"
+          style={{
+            width: brushRadius * 2,
+            height: brushRadius * 2,
+            marginLeft: -brushRadius,
+            marginTop: -brushRadius,
+          }}
+        />
+      )}
       <div className="map-label">
         <span className="live-dot" />{' '}
         {props.walk ? 'Стрілки показують напрямок' : 'Пішохідна карта'}

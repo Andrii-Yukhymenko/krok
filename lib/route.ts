@@ -166,6 +166,7 @@ let lastRequest = 0;
 export async function walkingRoute(
   points: Point[],
   signal: AbortSignal,
+  exclude: Point[] = [],
 ): Promise<Walk> {
   if (points.length < 2 || points.length > 20)
     throw new Error('Додайте від 2 до 20 точок.');
@@ -191,6 +192,8 @@ export async function walkingRoute(
     const part = await requestWalkingRoute(
       cleaned.slice(offset, offset + 10),
       signal,
+      false,
+      exclude,
     );
     if (
       combined.points.length &&
@@ -209,6 +212,7 @@ async function requestWalkingRoute(
   points: Point[],
   signal: AbortSignal,
   guidance: boolean | number = false,
+  exclude: Point[] = [],
 ): Promise<Walk> {
   const delay = Math.max(0, 1100 - (Date.now() - lastRequest));
   if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay));
@@ -218,6 +222,9 @@ async function requestWalkingRoute(
     process.env.NEXT_PUBLIC_ROUTING_URL ||
     'https://valhalla1.openstreetmap.de/route';
   const request = {
+    ...(exclude.length
+      ? { exclude_locations: exclude.map(([lat, lon]) => ({ lat, lon })) }
+      : {}),
     locations: points.map(([lat, lon], i) => ({
       lat,
       lon,
@@ -467,8 +474,7 @@ export function cleanSketchSpurs(walk: Walk, sketch: Point[]): Walk {
       // Directions returned for the same pavement can differ by a few metres.
       // Treat only very close, symmetric returns as a spur; this still avoids
       // connecting separate nearby streets across a wall or building.
-      if (distance(points[i], points[j]) > 3)
-        continue;
+      if (distance(points[i], points[j]) > 3) continue;
       const branch = points.slice(i, j + 1);
       const symmetric = branch.every(
           (p, k) => distance(p, branch[branch.length - 1 - k]) < 8,

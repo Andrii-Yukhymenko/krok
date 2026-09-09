@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { SESSION_KEY, readSession } from '@/lib/session';
-import { eraseSection } from '@/lib/erase-section';
+import { eraseBrush, type BrushEdit } from '@/lib/brush-erase';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
@@ -67,7 +67,6 @@ const today = () => new Date().toLocaleDateString('en-CA');
 
 export default function Planner() {
   const [erasing, setErasing] = useState(false);
-  const [eraseAnchor, setEraseAnchor] = useState<number | null>(null);
   const [eraseUndo, setEraseUndo] = useState<{
     edited: Walk;
     walk: Walk;
@@ -350,12 +349,8 @@ export default function Planner() {
     precision,
     ideaStyle,
   ]);
-  async function eraseAt(index: number) {
+  async function eraseStroke(edit: BrushEdit) {
     if (!walk || busy || resizing) return;
-    if (eraseAnchor === null) {
-      setEraseAnchor(index);
-      return;
-    }
     const snapshot = { walk, sketch, points, mustVisit, places: routePlaces };
     cancelResize();
     controller.current?.abort();
@@ -364,24 +359,22 @@ export default function Planner() {
     setBusy(true);
     setMessage('');
     try {
-      const result = await eraseSection(walk, eraseAnchor, index, abort.signal);
+      const { walk: result, ranges } = await eraseBrush(edit, abort.signal);
       if (abort.signal.aborted) return;
       setEraseUndo({ ...snapshot, edited: result });
       setWalk(result);
       // Remove waypoints on the erased interval so later builds cannot restore the detour.
-      const a = Math.min(eraseAnchor, index),
-        b = Math.max(eraseAnchor, index);
       const keep = (p: Point) => {
         let nearest = 0,
           best = Infinity;
-        walk.points.forEach((q, i) => {
+        edit.walk.points.forEach((q, i) => {
           const d = distance(p, q);
           if (d < best) {
             best = d;
             nearest = i;
           }
         });
-        return nearest <= a || nearest >= b;
+        return !ranges.some(([a, b]) => nearest > a && nearest < b);
       };
       setPoints(points.filter(keep));
       setMustVisit(mustVisit.filter(keep));
@@ -403,7 +396,6 @@ export default function Planner() {
     } finally {
       if (controller.current === abort) {
         setBusy(false);
-        setEraseAnchor(null);
       }
     }
   }
@@ -412,13 +404,13 @@ export default function Planner() {
       controller.current?.abort();
       controller.current = null;
       setBusy(false);
-      setEraseAnchor(null);
+
       setMessage('Стирання скасовано. Маршрут залишено.');
     } else invalidate();
   }
   function invalidate() {
     setErasing(false);
-    setEraseAnchor(null);
+
     setEraseUndo(null);
     cancelResize();
     setPlacesNotice('');
@@ -1108,16 +1100,11 @@ export default function Planner() {
           {loaded && (
             <WalkMap
               erasing={erasing}
-              eraseAnchor={
-                eraseAnchor === null
-                  ? null
-                  : (walk?.points[eraseAnchor] ?? null)
-              }
               editableWalk={walk}
-              onEraseAt={(index) => void eraseAt(index)}
+              onEraseStroke={eraseStroke}
               onToggleEraser={() => {
                 setErasing(!erasing);
-                setEraseAnchor(null);
+
                 setDrawing(false);
                 setPickingStart(false);
                 setPanelOpen(false);
@@ -1132,7 +1119,7 @@ export default function Planner() {
                 setMustVisit(eraseUndo.mustVisit);
                 setRoutePlaces(eraseUndo.places);
                 setEraseUndo(null);
-                setEraseAnchor(null);
+
                 setMessage('Редагування скасовано.');
               }}
               lockViewport={resizeTarget !== null || erasing}
@@ -1165,7 +1152,7 @@ export default function Planner() {
               sketch={sketch}
               onToggleDrawing={() => {
                 setErasing(false);
-                setEraseAnchor(null);
+
                 setDrawing(!drawing);
                 setPickingStart(false);
               }}
