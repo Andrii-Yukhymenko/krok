@@ -1517,3 +1517,6 @@ h1 span {
   border: 0;
   margin: 0;
 }
+
+.erase-tools { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.erase-tools .point-tool-hint { max-width: 310px; white-space: normal; }

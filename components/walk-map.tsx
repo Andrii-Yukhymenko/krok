@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type * as Leaflet from 'leaflet';
 import {
+  Eraser,
+  Undo2,
   LocateFixed,
   Plus,
   Minus,
@@ -21,9 +23,17 @@ import {
   type Walk,
   type SketchPrecision,
 } from '@/lib/route';
+import { isPoint } from '@/lib/session';
 import { directionLane, directionArrows } from '@/lib/route-display';
 
 type Props = {
+  erasing: boolean;
+  eraseAnchor: Point | null;
+  editableWalk: Walk | null;
+  onEraseAt: (index: number) => void;
+  onToggleEraser: () => void;
+  canUndoErase: boolean;
+  onUndoErase: () => void;
   lockViewport: boolean;
   suggestedPoints: Point[];
   pointTool: 'add' | 'edit' | 'move';
@@ -61,6 +71,8 @@ export default function WalkMap(props: Props) {
   useEffect(() => {
     latest.current = props;
   }, [props]);
+  const skipInitialStart = useRef(false),
+    skipInitialFit = useRef(false);
   const [ready, setReady] = useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -73,6 +85,38 @@ export default function WalkMap(props: Props) {
           attributionControl: true,
         }).setView(DEFAULT_START, 14);
         map.current = m;
+        try {
+          const view = JSON.parse(
+            localStorage.getItem('krok-map-view') || 'null',
+          );
+          if (
+            view &&
+            isPoint(view.center) &&
+            Number.isFinite(view.zoom) &&
+            view.zoom >= 1 &&
+            view.zoom <= 19
+          ) {
+            m.setView(view.center, view.zoom);
+            skipInitialStart.current = true;
+            skipInitialFit.current = true;
+          }
+        } catch {
+          /* Planning remains available when storage is blocked. */
+        }
+        m.on('moveend zoomend', () => {
+          const center = m.getCenter();
+          try {
+            localStorage.setItem(
+              'krok-map-view',
+              JSON.stringify({
+                center: [center.lat, center.lng],
+                zoom: m.getZoom(),
+              }),
+            );
+          } catch {
+            /* The planner reports unavailable storage. */
+          }
+        });
         L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
           maxZoom: 19,
           attribution:
@@ -87,6 +131,22 @@ export default function WalkMap(props: Props) {
           .addTo(m);
         layers.current = L.layerGroup().addTo(m);
         m.on('click', (e) => {
+          if (latest.current.erasing) {
+            if (latest.current.busy || !latest.current.editableWalk) return;
+            const hit = m.latLngToContainerPoint(e.latlng);
+            let nearest = -1,
+              best = 32;
+            latest.current.editableWalk.points.forEach((p, i) => {
+              const d = m.latLngToContainerPoint(p).distanceTo(hit);
+              if (d < best) {
+                nearest = i;
+                best = d;
+              }
+            });
+            if (nearest >= 0) latest.current.onEraseAt(nearest);
+            else latest.current.onError('Торкніться ближче до лінії маршруту.');
+            return;
+          }
           if (
             !latest.current.drawing &&
             !latest.current.pickingStart &&
@@ -117,7 +177,8 @@ export default function WalkMap(props: Props) {
         props.mode === 'multi' ||
         props.mode === 'auto') &&
       props.pointTool === 'edit' &&
-      !props.pickingStart;
+      !props.pickingStart &&
+      !props.erasing;
     const wireEditor = (marker: Leaflet.Marker, index: number) => {
       if (!editing) return marker;
       marker.on('click', () => latest.current.onSelectPoint(index));
@@ -248,6 +309,7 @@ export default function WalkMap(props: Props) {
     props.busy,
     props.pickingStart,
     props.suggestedPoints,
+    props.erasing,
   ]);
   useEffect(() => {
     const L = api.current,
@@ -313,12 +375,21 @@ export default function WalkMap(props: Props) {
     return () => observer.disconnect();
   }, [ready]);
   useEffect(() => {
-    if (ready && props.start && props.pointTool !== 'edit')
+    if (!ready) return;
+    if (skipInitialStart.current) {
+      skipInitialStart.current = false;
+      return;
+    }
+    if (props.start && props.pointTool !== 'edit')
       map.current?.setView(props.start, 15);
   }, [ready, props.start, props.pointTool]);
   useEffect(() => {
+    if (!ready) return;
+    if (skipInitialFit.current) {
+      skipInitialFit.current = false;
+      return;
+    }
     if (
-      ready &&
       props.walk &&
       !props.lockViewport &&
       props.mode !== 'draw' &&
@@ -447,6 +518,54 @@ export default function WalkMap(props: Props) {
       m.touchZoom.enable();
     };
   }, [ready, props.drawing]);
+  useEffect(() => {
+    if (!ready || !map.current || !api.current || !props.eraseAnchor) return;
+    const marker = api.current
+      .circleMarker(props.eraseAnchor, {
+        radius: 10,
+        color: '#ba3d37',
+        fillColor: '#fff',
+        fillOpacity: 1,
+        weight: 3,
+        interactive: false,
+      })
+      .addTo(map.current);
+    return () => {
+      marker.remove();
+    };
+  }, [ready, props.eraseAnchor]);
+  const eraseTools = props.walk && (
+    <div className="erase-tools">
+      <div className="point-tool-row">
+        <button
+          disabled={props.busy || props.drawing}
+          onClick={props.onToggleEraser}
+          aria-pressed={props.erasing}
+          className={props.erasing ? 'active' : ''}
+        >
+          <Eraser size={17} />{' '}
+          {props.erasing ? 'Завершити стирання' : 'Стирачка'}
+        </button>
+        {props.canUndoErase && (
+          <button
+            disabled={props.busy}
+            onClick={props.onUndoErase}
+            aria-label="Скасувати стирання"
+          >
+            <Undo2 size={17} />
+          </button>
+        )}
+      </div>
+      {props.erasing && (
+        <output className="point-tool-hint">
+          {props.eraseAnchor
+            ? 'Торкніться кінця зайвої ділянки.'
+            : 'Торкніться початку зайвої ділянки.'}{' '}
+          З’єднаємо пішохідним шляхом.
+        </output>
+      )}
+    </div>
+  );
   return (
     <section
       className={
@@ -470,6 +589,7 @@ export default function WalkMap(props: Props) {
       )}
       {props.mode === 'draw' && props.start && !props.pickingStart && (
         <div className="map-draw-tools sketch-tools">
+          {eraseTools}
           <button
             disabled={props.busy}
             onClick={props.onToggleDrawing}
@@ -519,6 +639,7 @@ export default function WalkMap(props: Props) {
             className="map-draw-tools point-tools"
             aria-label="Керування точками"
           >
+            {eraseTools}
             <div className="point-tool-row">
               <button
                 disabled={props.busy}
@@ -562,7 +683,7 @@ export default function WalkMap(props: Props) {
                 </span>
               </span>
             )}
-            {props.pointTool === 'edit' && (
+            {props.pointTool === 'edit' && !props.erasing && (
               <>
                 <span className="point-tool-hint">
                   Перетягніть точку — шлях оновиться.

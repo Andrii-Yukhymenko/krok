@@ -1,5 +1,7 @@
 'use client';
 import Link from 'next/link';
+import { SESSION_KEY, readSession } from '@/lib/session';
+import { eraseSection } from '@/lib/erase-section';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
@@ -42,6 +44,7 @@ import { resizeWalk } from '@/lib/resize-walk';
 import RouteLengthControl from './route-length-control';
 import {
   DEFAULT_START,
+  distance,
   destination,
   sampleSketch,
   sketchRoute,
@@ -63,6 +66,16 @@ const coords = (p: Point) => p.map((n) => n.toFixed(4)).join(', ');
 const today = () => new Date().toLocaleDateString('en-CA');
 
 export default function Planner() {
+  const [erasing, setErasing] = useState(false);
+  const [eraseAnchor, setEraseAnchor] = useState<number | null>(null);
+  const [eraseUndo, setEraseUndo] = useState<{
+    edited: Walk;
+    walk: Walk;
+    sketch: Point[];
+    points: Point[];
+    mustVisit: Point[];
+    places: Place[];
+  } | null>(null);
   const [resizeTarget, setResizeTarget] = useState<number | null>(null);
   const [resizing, setResizing] = useState(false);
   const resizeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -242,6 +255,24 @@ export default function Planner() {
       } catch {
         setStorageError(true);
       }
+      try {
+        const saved = readSession(localStorage.getItem(SESSION_KEY));
+        if (saved) {
+          setStart(saved.start);
+          setStartLabel(saved.startLabel);
+          setPoints(saved.points);
+          setSketch(saved.sketch);
+          setMustVisit(saved.mustVisit);
+          setWalk(saved.walk);
+          setRoutePlaces(saved.routePlaces ?? []);
+          setMode(saved.mode);
+          setBack(saved.back);
+          setPrecision(saved.precision);
+          setIdeaStyle(saved.ideaStyle);
+        }
+      } catch {
+        setStorageError(true);
+      }
       setLoaded(true);
     });
     const net = () => setOnline(navigator.onLine);
@@ -280,7 +311,115 @@ export default function Planner() {
         queueMicrotask(() => setStorageError(true));
       }
   }, [height, goal, done, loaded]);
+  useEffect(() => {
+    if (!loaded || busy || resizing) return;
+    try {
+      localStorage.setItem(
+        SESSION_KEY,
+        JSON.stringify({
+          version: 1,
+          start,
+          startLabel,
+          points,
+          sketch,
+          mustVisit,
+          walk,
+          routePlaces,
+          mode,
+          back,
+          precision,
+          ideaStyle,
+        }),
+      );
+    } catch {
+      queueMicrotask(() => setStorageError(true));
+    }
+  }, [
+    loaded,
+    busy,
+    resizing,
+    routePlaces,
+    start,
+    startLabel,
+    points,
+    sketch,
+    mustVisit,
+    walk,
+    mode,
+    back,
+    precision,
+    ideaStyle,
+  ]);
+  async function eraseAt(index: number) {
+    if (!walk || busy || resizing) return;
+    if (eraseAnchor === null) {
+      setEraseAnchor(index);
+      return;
+    }
+    const snapshot = { walk, sketch, points, mustVisit, places: routePlaces };
+    cancelResize();
+    controller.current?.abort();
+    const abort = new AbortController();
+    controller.current = abort;
+    setBusy(true);
+    setMessage('');
+    try {
+      const result = await eraseSection(walk, eraseAnchor, index, abort.signal);
+      if (abort.signal.aborted) return;
+      setEraseUndo({ ...snapshot, edited: result });
+      setWalk(result);
+      // Remove waypoints on the erased interval so later builds cannot restore the detour.
+      const a = Math.min(eraseAnchor, index),
+        b = Math.max(eraseAnchor, index);
+      const keep = (p: Point) => {
+        let nearest = 0,
+          best = Infinity;
+        walk.points.forEach((q, i) => {
+          const d = distance(p, q);
+          if (d < best) {
+            best = d;
+            nearest = i;
+          }
+        });
+        return nearest <= a || nearest >= b;
+      };
+      setPoints(points.filter(keep));
+      setMustVisit(mustVisit.filter(keep));
+      setRoutePlaces(routePlaces.filter((p) => keep(p.point)));
+      if (mode === 'draw') {
+        setSketch(result.points);
+        setPoints(sampleSketch(result.points));
+      }
+      setMessage(
+        'Ділянку замінено пішохідним шляхом. За потреби скасуйте зміну.',
+      );
+    } catch (error) {
+      if (!abort.signal.aborted)
+        setMessage(
+          (error instanceof Error
+            ? error.message
+            : 'Не вдалося змінити ділянку.') + ' Маршрут залишено.',
+        );
+    } finally {
+      if (controller.current === abort) {
+        setBusy(false);
+        setEraseAnchor(null);
+      }
+    }
+  }
+  function cancelSearch() {
+    if (erasing && walk) {
+      controller.current?.abort();
+      controller.current = null;
+      setBusy(false);
+      setEraseAnchor(null);
+      setMessage('Стирання скасовано. Маршрут залишено.');
+    } else invalidate();
+  }
   function invalidate() {
+    setErasing(false);
+    setEraseAnchor(null);
+    setEraseUndo(null);
     cancelResize();
     setPlacesNotice('');
     controller.current?.abort();
@@ -847,11 +986,17 @@ export default function Planner() {
             </button>
           )}
           {busy && (
-            <button className="text-button" onClick={invalidate}>
+            <button className="text-button" onClick={cancelSearch}>
               Скасувати пошук
             </button>
           )}
           <output aria-live="polite">
+            {storageError && (
+              <p className="notice" role="alert">
+                Браузер не дозволяє зберегти дані. Після закриття маршрут може
+                зникнути.
+              </p>
+            )}
             {placesNotice && <p className="notice">{placesNotice}</p>}
             {(!online || message) && (
               <p className="notice">
@@ -960,59 +1105,91 @@ export default function Planner() {
           </p>
         </PlannerPanel>
         <div className="map-area">
-          <WalkMap
-            lockViewport={resizeTarget !== null}
-            suggestedPoints={routePlaces.map((p) => p.point)}
-            pointTool={pointTool}
-            selectedPoint={selectedPoint}
-            onPointTool={setPointTool}
-            onSelectPoint={setSelectedPoint}
-            onMovePoint={movePoint}
-            onRemovePoint={removePoint}
-            onBuild={() => (mode === 'auto' ? void suggest() : void build())}
-            onClearPoints={() => {
-              if (mode === 'auto') setMustVisit([]);
-              invalidate();
-              setPoints([]);
-              setSelectedPoint(null);
-            }}
-            precision={precision}
-            onPrecision={(value) => {
-              setPrecision(value);
-              if (sketch.length) void build(points, start, sketch, value);
-            }}
-            start={start}
-            points={mode === 'auto' ? mustVisit : points}
-            walk={shownWalk}
-            drawing={drawing}
-            pickingStart={pickingStart}
-            busy={busy || resizing}
-            mode={mode}
-            sketch={sketch}
-            onToggleDrawing={() => {
-              setDrawing(!drawing);
-              setPickingStart(false);
-            }}
-            onNewSketch={() => {
-              invalidate();
-              setSketch([]);
-              setPoints([]);
-              setDrawing(true);
-            }}
-            onConfirmStart={(p) => chooseStart(p)}
-            onPoint={onPoint}
-            onSketch={(stroke) => {
-              const complete = [...sketch, ...stroke];
-              const simplified = sampleSketch(complete);
-              invalidate();
-              setSketch(complete);
-              setPoints(simplified);
-              setDrawing(false);
-              void build(simplified, start, complete);
-            }}
-            onGps={gps}
-            onError={setMessage}
-          />
+          {loaded && (
+            <WalkMap
+              erasing={erasing}
+              eraseAnchor={
+                eraseAnchor === null
+                  ? null
+                  : (walk?.points[eraseAnchor] ?? null)
+              }
+              editableWalk={walk}
+              onEraseAt={(index) => void eraseAt(index)}
+              onToggleEraser={() => {
+                setErasing(!erasing);
+                setEraseAnchor(null);
+                setDrawing(false);
+                setPickingStart(false);
+                setPanelOpen(false);
+              }}
+              canUndoErase={!!eraseUndo && eraseUndo.edited === walk}
+              onUndoErase={() => {
+                if (!eraseUndo || eraseUndo.edited !== walk) return;
+                cancelResize();
+                setWalk(eraseUndo.walk);
+                setSketch(eraseUndo.sketch);
+                setPoints(eraseUndo.points);
+                setMustVisit(eraseUndo.mustVisit);
+                setRoutePlaces(eraseUndo.places);
+                setEraseUndo(null);
+                setEraseAnchor(null);
+                setMessage('Редагування скасовано.');
+              }}
+              lockViewport={resizeTarget !== null || erasing}
+              suggestedPoints={routePlaces.map((p) => p.point)}
+              pointTool={pointTool}
+              selectedPoint={selectedPoint}
+              onPointTool={setPointTool}
+              onSelectPoint={setSelectedPoint}
+              onMovePoint={movePoint}
+              onRemovePoint={removePoint}
+              onBuild={() => (mode === 'auto' ? void suggest() : void build())}
+              onClearPoints={() => {
+                if (mode === 'auto') setMustVisit([]);
+                invalidate();
+                setPoints([]);
+                setSelectedPoint(null);
+              }}
+              precision={precision}
+              onPrecision={(value) => {
+                setPrecision(value);
+                if (sketch.length) void build(points, start, sketch, value);
+              }}
+              start={start}
+              points={mode === 'auto' ? mustVisit : points}
+              walk={shownWalk}
+              drawing={drawing}
+              pickingStart={pickingStart}
+              busy={busy || resizing}
+              mode={mode}
+              sketch={sketch}
+              onToggleDrawing={() => {
+                setErasing(false);
+                setEraseAnchor(null);
+                setDrawing(!drawing);
+                setPickingStart(false);
+              }}
+              onNewSketch={() => {
+                invalidate();
+                setSketch([]);
+                setPoints([]);
+                setDrawing(true);
+              }}
+              onConfirmStart={(p) => chooseStart(p)}
+              onPoint={onPoint}
+              onSketch={(stroke) => {
+                const complete = [...sketch, ...stroke];
+                const simplified = sampleSketch(complete);
+                invalidate();
+                setSketch(complete);
+                setPoints(simplified);
+                setDrawing(false);
+                void build(simplified, start, complete);
+              }}
+              onGps={gps}
+              onError={setMessage}
+            />
+          )}
           <div className="mobile-map-dock">
             {shownWalk && (
               <div className="mobile-length-control">{lengthControl}</div>
@@ -1038,15 +1215,23 @@ export default function Planner() {
               <Settings2 size={18} />
               Маршрут
             </button>
-            {(!online || message || placesNotice) && (
+            {(!online || message || placesNotice || storageError) && (
               <output className="mobile-notice" aria-live="polite">
                 {!online
                   ? 'Ви офлайн. Потрібен інтернет.'
-                  : [message, placesNotice].filter(Boolean).join(' ')}
+                  : [
+                      storageError
+                        ? 'Браузер не дозволяє зберегти маршрут.'
+                        : '',
+                      message,
+                      placesNotice,
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
               </output>
             )}
             {busy && (
-              <button className="text-button" onClick={invalidate}>
+              <button className="text-button" onClick={cancelSearch}>
                 Скасувати пошук
               </button>
             )}
@@ -1176,9 +1361,10 @@ export default function Planner() {
             Точки та ескіз маршруту надсилаються сервісу Valhalla. Для пошуку
             парків координати старту надсилаються Overpass API; карта
             завантажується з OpenStreetMap. Місця й область пошуку зберігаються
-            лише на цьому пристрої та використовуються до 7 днів. Діагностичний
-            звіт не містить координат, назв місць або ліній маршруту й
-            завантажується лише за вашим натисканням.
+            лише на цьому пристрої та використовуються до 7 днів. Налаштування,
+            старт і маршрут також зберігаються в цьому браузері до очищення
+            даних сайту. Діагностичний звіт не містить координат, назв місць або
+            ліній маршруту й завантажується лише за вашим натисканням.
           </p>
           <button
             className="text-button"
