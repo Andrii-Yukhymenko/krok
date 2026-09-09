@@ -542,6 +542,7 @@ export default function WalkMap(props: Props) {
     let points: Point[] = [],
       pixels: { x: number; y: number }[] = [],
       hits = new Set<number>();
+    let pan: { pointer: number; x: number; y: number } | null = null;
     let baseWalk: Walk | null = null;
     let previous: { x: number; y: number } | null = null;
     const cursor = (event: PointerEvent) => {
@@ -553,6 +554,20 @@ export default function WalkMap(props: Props) {
       return p;
     };
     const paint = (event: PointerEvent) => {
+      if (pan) {
+        if (pan.pointer !== event.pointerId) return;
+        event.preventDefault();
+        if (!(event.buttons & 4)) {
+          endPan();
+          return;
+        }
+        m.panBy([pan.x - event.clientX, pan.y - event.clientY], {
+          animate: false,
+        });
+        pan.x = event.clientX;
+        pan.y = event.clientY;
+        return;
+      }
       const p = cursor(event);
       if (active !== event.pointerId || pending) return;
       event.preventDefault();
@@ -564,6 +579,16 @@ export default function WalkMap(props: Props) {
       setErasePreview(remainingLines(points, brushRanges(hits, points.length)));
     };
     const down = (event: PointerEvent) => {
+      if (event.button === 1 && active === null) {
+        event.preventDefault();
+        event.stopPropagation();
+        pan = { pointer: event.pointerId, x: event.clientX, y: event.clientY };
+        el.setPointerCapture(event.pointerId);
+        el.style.cursor = 'grabbing';
+        if (cursorElement) cursorElement.style.display = 'none';
+        return;
+      }
+      if (pan) return;
       if (
         active !== null ||
         pending ||
@@ -586,7 +611,18 @@ export default function WalkMap(props: Props) {
       setBrushing(true);
       paint(event);
     };
+    const endPan = () => {
+      if (!pan) return;
+      const pointer = pan.pointer;
+      pan = null;
+      if (el.hasPointerCapture(pointer)) el.releasePointerCapture(pointer);
+      el.style.cursor = '';
+    };
     const finish = async (event: PointerEvent) => {
+      if (pan?.pointer === event.pointerId) {
+        endPan();
+        return;
+      }
       if (active !== event.pointerId) return;
       if (event.type !== 'pointercancel') paint(event);
       active = null;
@@ -621,6 +657,7 @@ export default function WalkMap(props: Props) {
         brushCursor.current.style.display = 'none';
     };
     const cancelStroke = () => {
+      endPan();
       if (active === null) return;
       const pointer = active;
       active = null;
@@ -631,6 +668,11 @@ export default function WalkMap(props: Props) {
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') cancelStroke();
     };
+    const preventMiddleDefault = (event: MouseEvent) => {
+      if (event.button === 1) event.preventDefault();
+    };
+    el.addEventListener('mousedown', preventMiddleDefault);
+    el.addEventListener('auxclick', preventMiddleDefault);
     window.addEventListener('keydown', escape);
     window.addEventListener('blur', cancelStroke);
     el.addEventListener('pointerdown', down);
@@ -640,6 +682,9 @@ export default function WalkMap(props: Props) {
     el.addEventListener('pointerleave', leave);
     return () => {
       disposed = true;
+      endPan();
+      el.removeEventListener('mousedown', preventMiddleDefault);
+      el.removeEventListener('auxclick', preventMiddleDefault);
       if (active !== null && el.hasPointerCapture(active))
         el.releasePointerCapture(active);
       el.removeEventListener('pointerdown', down);
@@ -697,7 +742,7 @@ export default function WalkMap(props: Props) {
           <output className="point-tool-hint">
             {props.busy
               ? 'З’єднуємо маршрут в обхід стертої дороги…'
-              : 'Затисніть і проводьте по лінії. Відпустіть — маршрут з’єднається.'}
+              : 'Ліва кнопка — стирати, затиснуте коліщатко — рухати карту. На телефоні — проводьте пальцем.'}
           </output>
         </>
       )}
