@@ -1,0 +1,36 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { TouchGesture } from '../lib/touch-gesture.ts';
+void test('second finger enters navigation, last finger must lift before erasing again', () => {
+  const gesture = new TouchGesture();
+  gesture.down(1, { x: 0, y: 0 });
+  assert.equal(gesture.navigating, false);
+  gesture.down(2, { x: 100, y: 0 });
+  assert.equal(gesture.navigating, true);
+  gesture.up(2);
+  assert.equal(gesture.navigating, true);
+  assert.equal(gesture.pair(), null);
+  gesture.move(1, { x: 50, y: 50 });
+  assert.equal(gesture.navigating, true);
+  gesture.up(1);
+  assert.equal(gesture.navigating, false);
+  gesture.down(3, { x: 0, y: 0 });
+  assert.equal(gesture.navigating, false);
+});
+void test('two-finger translation and scale are independent, extra touches can rebase', () => {
+  const gesture = new TouchGesture();
+  gesture.down(1, { x: 0, y: 0 });
+  gesture.down(2, { x: 100, y: 0 });
+  assert.deepEqual(gesture.pair(), { midpoint: { x: 50, y: 0 }, span: 100 });
+  gesture.move(1, { x: 20, y: 30 });
+  gesture.move(2, { x: 120, y: 30 });
+  assert.deepEqual(gesture.pair(), { midpoint: { x: 70, y: 30 }, span: 100 });
+  gesture.move(2, { x: 220, y: 30 });
+  assert.equal(gesture.pair()!.span, 200);
+  gesture.down(3, { x: 300, y: 30 });
+  gesture.up(1);
+  assert.equal(gesture.pair()!.span, 80);
+  gesture.reset();
+  assert.equal(gesture.navigating, false);
+  assert.equal(gesture.points.size, 0);
+});

@@ -30,6 +30,7 @@ import {
   segmentDistance,
   type BrushEdit,
 } from '@/lib/brush-erase';
+import { TouchGesture } from '@/lib/touch-gesture';
 import { isPoint } from '@/lib/session';
 import { directionLane, directionArrows } from '@/lib/route-display';
 
@@ -536,6 +537,24 @@ export default function WalkMap(props: Props) {
     m.doubleClickZoom.disable();
     m.touchZoom.disable();
     const cursorElement = brushCursor.current;
+    const touches = new TouchGesture();
+    const originalZoomSnap = m.options.zoomSnap;
+    m.options.zoomSnap = 0;
+    let pinch: { anchor: Leaflet.LatLng; zoom: number; span: number } | null =
+      null;
+    const beginPinch = () => {
+      const pair = touches.pair();
+      pinch = pair
+        ? {
+            anchor: m.containerPointToLatLng([
+              pair.midpoint.x,
+              pair.midpoint.y,
+            ]),
+            zoom: m.getZoom(),
+            span: pair.span,
+          }
+        : null;
+    };
     let active: number | null = null,
       pending = false,
       disposed = false;
@@ -554,6 +573,28 @@ export default function WalkMap(props: Props) {
       return p;
     };
     const paint = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') {
+        touches.move(event.pointerId, m.mouseEventToContainerPoint(event));
+        if (touches.navigating) {
+          event.preventDefault();
+          const pair = touches.pair();
+          if (pair && pinch) {
+            const zoom = Math.max(
+              m.getMinZoom(),
+              Math.min(
+                m.getMaxZoom(),
+                m.getScaleZoom(pair.span / pinch.span, pinch.zoom),
+              ),
+            );
+            const center = m
+              .project(pinch.anchor, zoom)
+              .subtract([pair.midpoint.x, pair.midpoint.y])
+              .add(m.getSize().divideBy(2));
+            m.setView(m.unproject(center, zoom), zoom, { animate: false });
+          }
+          return;
+        }
+      }
       if (pan) {
         if (pan.pointer !== event.pointerId) return;
         event.preventDefault();
@@ -579,6 +620,19 @@ export default function WalkMap(props: Props) {
       setErasePreview(remainingLines(points, brushRanges(hits, points.length)));
     };
     const down = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') {
+        touches.down(event.pointerId, m.mouseEventToContainerPoint(event));
+        el.setPointerCapture(event.pointerId);
+        if (touches.navigating) {
+          event.preventDefault();
+          event.stopPropagation();
+          cancelStroke();
+          for (const id of touches.points.keys()) el.setPointerCapture(id);
+          if (cursorElement) cursorElement.style.display = 'none';
+          beginPinch();
+          return;
+        }
+      }
       if (event.button === 1 && active === null) {
         event.preventDefault();
         event.stopPropagation();
@@ -619,6 +673,14 @@ export default function WalkMap(props: Props) {
       el.style.cursor = '';
     };
     const finish = async (event: PointerEvent) => {
+      if (event.pointerType === 'touch' && touches.navigating) {
+        touches.up(event.pointerId);
+        if (el.hasPointerCapture(event.pointerId))
+          el.releasePointerCapture(event.pointerId);
+        beginPinch();
+        return;
+      }
+      if (event.pointerType === 'touch') touches.up(event.pointerId);
       if (pan?.pointer === event.pointerId) {
         endPan();
         return;
@@ -665,8 +727,15 @@ export default function WalkMap(props: Props) {
       setBrushing(false);
       setErasePreview(null);
     };
+    const cancelInteraction = () => {
+      cancelStroke();
+      for (const id of touches.points.keys())
+        if (el.hasPointerCapture(id)) el.releasePointerCapture(id);
+      touches.reset();
+      pinch = null;
+    };
     const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') cancelStroke();
+      if (event.key === 'Escape') cancelInteraction();
     };
     const preventMiddleDefault = (event: MouseEvent) => {
       if (event.button === 1) event.preventDefault();
@@ -674,7 +743,7 @@ export default function WalkMap(props: Props) {
     el.addEventListener('mousedown', preventMiddleDefault);
     el.addEventListener('auxclick', preventMiddleDefault);
     window.addEventListener('keydown', escape);
-    window.addEventListener('blur', cancelStroke);
+    window.addEventListener('blur', cancelInteraction);
     el.addEventListener('pointerdown', down);
     el.addEventListener('pointermove', paint);
     el.addEventListener('pointerup', finish);
@@ -682,6 +751,8 @@ export default function WalkMap(props: Props) {
     el.addEventListener('pointerleave', leave);
     return () => {
       disposed = true;
+      cancelInteraction();
+      m.options.zoomSnap = originalZoomSnap;
       endPan();
       el.removeEventListener('mousedown', preventMiddleDefault);
       el.removeEventListener('auxclick', preventMiddleDefault);
@@ -689,7 +760,7 @@ export default function WalkMap(props: Props) {
         el.releasePointerCapture(active);
       el.removeEventListener('pointerdown', down);
       window.removeEventListener('keydown', escape);
-      window.removeEventListener('blur', cancelStroke);
+      window.removeEventListener('blur', cancelInteraction);
       el.removeEventListener('pointermove', paint);
       el.removeEventListener('pointerup', finish);
       el.removeEventListener('pointercancel', finish);
@@ -742,7 +813,7 @@ export default function WalkMap(props: Props) {
           <output className="point-tool-hint">
             {props.busy
               ? 'З’єднуємо маршрут в обхід стертої дороги…'
-              : 'Ліва кнопка — стирати, затиснуте коліщатко — рухати карту. На телефоні — проводьте пальцем.'}
+              : 'Ліва кнопка — стирати, затиснуте коліщатко — рухати карту. На телефоні: один палець — стирати, два — рухати й масштабувати.'}
           </output>
         </>
       )}
