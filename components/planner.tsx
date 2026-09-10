@@ -1096,13 +1096,16 @@ export default function Planner() {
             лічильник руху.
           </p>
         </PlannerPanel>
-        <div className="map-area">
+        <div
+          className={'map-area' + (drawing || erasing ? ' editing-map' : '')}
+        >
           {loaded && (
             <WalkMap
               erasing={erasing}
               editableWalk={walk}
               onEraseStroke={eraseStroke}
               onToggleEraser={() => {
+                setMessage('');
                 setErasing(!erasing);
 
                 setDrawing(false);
@@ -1151,6 +1154,7 @@ export default function Planner() {
               mode={mode}
               sketch={sketch}
               onToggleDrawing={() => {
+                setMessage('');
                 setErasing(false);
 
                 setDrawing(!drawing);
@@ -1178,9 +1182,10 @@ export default function Planner() {
             />
           )}
           <div className="mobile-map-dock">
-            {shownWalk && (
-              <div className="mobile-length-control">{lengthControl}</div>
-            )}
+            <div className="mobile-editing-summary">
+              <strong>{erasing ? 'Стирання' : 'Малювання'}</strong>
+              <span>Два пальці — рух і масштаб</span>
+            </div>
             <div className="mobile-route-summary" aria-live="polite">
               <strong>
                 {busy
@@ -1203,7 +1208,11 @@ export default function Planner() {
               Маршрут
             </button>
             {(!online || message || placesNotice || storageError) && (
-              <output className="mobile-notice" aria-live="polite">
+              <button
+                className="mobile-notice"
+                onClick={() => setPanelOpen(true)}
+                aria-label="Відкрити повідомлення про маршрут"
+              >
                 {!online
                   ? 'Ви офлайн. Потрібен інтернет.'
                   : [
@@ -1215,7 +1224,7 @@ export default function Planner() {
                     ]
                       .filter(Boolean)
                       .join(' ')}
-              </output>
+              </button>
             )}
             {busy && (
               <button className="text-button" onClick={cancelSearch}>

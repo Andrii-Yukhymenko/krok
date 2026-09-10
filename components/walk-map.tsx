@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type * as Leaflet from 'leaflet';
 import {
+  SlidersHorizontal,
   Eraser,
   Undo2,
   LocateFixed,
@@ -31,6 +32,12 @@ import {
   type BrushEdit,
 } from '@/lib/brush-erase';
 import { bindDrawingGesture } from '@/lib/drawing-gesture';
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
 import { TouchGesture } from '@/lib/touch-gesture';
 import { isPoint } from '@/lib/session';
 import { directionLane, directionArrows } from '@/lib/route-display';
@@ -70,6 +77,11 @@ type Props = {
   onGps: () => void;
   onError: (s: string) => void;
 };
+function routeBoundsOptions(m: Leaflet.Map): Leaflet.FitBoundsOptions {
+  return m.getSize().x <= 700
+    ? { paddingTopLeft: [18, 86], paddingBottomRight: [62, 130], maxZoom: 16 }
+    : { padding: [50, 60], maxZoom: 16 };
+}
 export default function WalkMap(props: Props) {
   const container = useRef<HTMLDivElement>(null),
     map = useRef<Leaflet.Map | null>(null),
@@ -82,6 +94,7 @@ export default function WalkMap(props: Props) {
   const skipInitialStart = useRef(false),
     skipInitialFit = useRef(false);
   const brushCursor = useRef<HTMLDivElement>(null);
+  const [mobileOptions, setMobileOptions] = useState(false);
   const [brushRadius, setBrushRadius] = useState(28);
   const [erasePreview, setErasePreview] = useState<Point[][] | null>(null);
   const [brushing, setBrushing] = useState(false);
@@ -408,10 +421,10 @@ export default function WalkMap(props: Props) {
       props.mode !== 'draw' &&
       props.pointTool !== 'edit'
     )
-      map.current?.fitBounds(props.walk.points, {
-        padding: [50, 60],
-        maxZoom: 16,
-      });
+      map.current?.fitBounds(
+        props.walk.points,
+        routeBoundsOptions(map.current),
+      );
   }, [ready, props.walk, props.mode, props.pointTool, props.lockViewport]);
   useEffect(() => {
     const m = map.current,
@@ -722,6 +735,24 @@ export default function WalkMap(props: Props) {
       )}
     </div>
   );
+  const mobileTool = props.erasing
+    ? 'erase'
+    : props.drawing
+      ? 'draw'
+      : props.mode !== 'draw'
+        ? props.pointTool
+        : 'move';
+  function selectMobileTool(tool: 'draw' | 'erase' | 'move' | 'add' | 'edit') {
+    if (tool === 'erase') {
+      if (!props.erasing) props.onToggleEraser();
+    } else {
+      if (props.erasing) props.onToggleEraser();
+      if ((tool === 'draw') !== props.drawing) props.onToggleDrawing();
+      if (tool === 'move' || tool === 'add' || tool === 'edit')
+        props.onPointTool(tool);
+    }
+    setMobileOptions(false);
+  }
   return (
     <section
       className={
@@ -752,6 +783,206 @@ export default function WalkMap(props: Props) {
           }}
         />
       )}
+      {props.start && !props.pickingStart && (
+        <nav className="mobile-editor-bar" aria-label="Інструменти карти">
+          <button
+            disabled={props.busy}
+            aria-label={
+              props.mode === 'draw'
+                ? 'Малювати або продовжити лінію'
+                : 'Додавати точки'
+            }
+            aria-pressed={
+              mobileTool === (props.mode === 'draw' ? 'draw' : 'add')
+            }
+            onClick={() =>
+              selectMobileTool(props.mode === 'draw' ? 'draw' : 'add')
+            }
+          >
+            {props.mode === 'draw' ? <Pencil size={20} /> : <Plus size={20} />}
+            <span>{props.mode === 'draw' ? 'Лінія' : 'Точки'}</span>
+          </button>
+          <button
+            disabled={props.busy || !props.walk}
+            aria-pressed={mobileTool === 'erase'}
+            onClick={() => selectMobileTool('erase')}
+          >
+            <Eraser size={20} />
+            <span>Стирати</span>
+          </button>
+          <button
+            disabled={props.busy}
+            aria-pressed={mobileTool === 'move'}
+            onClick={() => selectMobileTool('move')}
+          >
+            <Hand size={20} />
+            <span>Карта</span>
+          </button>
+          <button
+            disabled={props.busy || !props.canUndoErase}
+            onClick={props.onUndoErase}
+            aria-label="Скасувати останнє стирання"
+          >
+            <Undo2 size={20} />
+            <span>Назад</span>
+          </button>
+          <button
+            onClick={() => setMobileOptions(true)}
+            aria-label="Налаштування інструментів карти"
+          >
+            <SlidersHorizontal size={20} />
+            <span>Опції</span>
+          </button>
+        </nav>
+      )}
+      <Dialog open={mobileOptions} onOpenChange={setMobileOptions}>
+        <DialogContent className="mobile-editor-options">
+          <DialogTitle>Інструменти маршруту</DialogTitle>
+          <DialogDescription>
+            Змініть налаштування й поверніться до карти.
+          </DialogDescription>
+          {props.walk && (
+            <label className="editor-option">
+              Розмір стирачки
+              <input
+                type="range"
+                min="14"
+                max="60"
+                step="2"
+                value={brushRadius}
+                disabled={props.busy || brushing}
+                onChange={(e) => setBrushRadius(Number(e.target.value))}
+              />
+              <span className="brush-size-preview" aria-hidden="true">
+                <span style={{ width: brushRadius, height: brushRadius }} />
+              </span>
+            </label>
+          )}
+          {props.mode === 'draw' ? (
+            <>
+              <label className="editor-option">
+                Точність маршруту
+                <select
+                  value={props.precision}
+                  disabled={props.busy || props.drawing}
+                  onChange={(e) =>
+                    props.onPrecision(e.target.value as SketchPrecision)
+                  }
+                >
+                  <option value="loose">Вільно · до ≈200 м</option>
+                  <option value="balanced">Точніше · до ≈100 м</option>
+                  <option value="precise">За лінією</option>
+                </select>
+              </label>
+              {props.sketch.length > 0 && (
+                <button
+                  className="secondary-button"
+                  disabled={props.busy}
+                  onClick={() => {
+                    setMobileOptions(false);
+                    props.onNewSketch();
+                  }}
+                >
+                  <RotateCcw size={18} /> Почати новий малюнок
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <button
+                className="secondary-button"
+                disabled={props.busy}
+                onClick={() => selectMobileTool('edit')}
+              >
+                <Pencil size={18} /> Перетягувати точки
+              </button>
+              <label className="editor-option">
+                Обрана точка
+                <select
+                  value={props.selectedPoint ?? ''}
+                  disabled={props.busy}
+                  onChange={(e) =>
+                    props.onSelectPoint(
+                      e.target.value === '' ? null : Number(e.target.value),
+                    )
+                  }
+                >
+                  <option value="">Оберіть точку</option>
+                  <option value="-1">Старт</option>
+                  {props.points.map((_, i) => (
+                    <option key={i} value={i}>
+                      Точка {i + 1}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="secondary-button"
+                disabled={
+                  props.busy ||
+                  props.selectedPoint === null ||
+                  props.selectedPoint < 0
+                }
+                onClick={() => {
+                  if (props.selectedPoint !== null)
+                    props.onRemovePoint(props.selectedPoint);
+                }}
+              >
+                <Trash2 size={18} /> Видалити точку
+              </button>
+              <button
+                className="secondary-button"
+                disabled={props.busy || props.selectedPoint === null}
+                onClick={() => {
+                  const p = map.current?.getCenter();
+                  if (p && props.selectedPoint !== null) {
+                    props.onMovePoint(props.selectedPoint, [p.lat, p.lng]);
+                    setMobileOptions(false);
+                  }
+                }}
+              >
+                Перенести точку в центр карти
+              </button>
+              <button
+                className="secondary-button"
+                disabled={props.busy || !props.points.length}
+                onClick={() => props.onRemovePoint(props.points.length - 1)}
+              >
+                <Undo2 size={18} /> Прибрати останню точку
+              </button>
+              <button
+                className="secondary-button"
+                disabled={props.busy || !props.points.length}
+                onClick={props.onClearPoints}
+              >
+                <Trash2 size={18} /> Очистити точки
+              </button>
+              <button
+                className="primary-button"
+                disabled={
+                  props.busy || (!props.points.length && props.mode !== 'auto')
+                }
+                onClick={() => {
+                  setMobileOptions(false);
+                  props.onBuild();
+                }}
+              >
+                <Route size={18} /> Побудувати маршрут
+              </button>
+            </>
+          )}
+          <p className="editor-gesture-help">
+            Один палець — обраний інструмент. Два пальці — переміщення й масштаб
+            карти.
+          </p>
+          <button
+            className="primary-button"
+            onClick={() => setMobileOptions(false)}
+          >
+            Повернутися до карти
+          </button>
+        </DialogContent>
+      </Dialog>
       <div className="map-label">
         <span className="live-dot" />{' '}
         {props.walk ? 'Стрілки показують напрямок' : 'Пішохідна карта'}
@@ -975,7 +1206,10 @@ export default function WalkMap(props: Props) {
           aria-label="Показати весь маршрут"
           onClick={() => {
             if (props.walk)
-              map.current?.fitBounds(props.walk.points, { padding: [50, 60] });
+              map.current?.fitBounds(
+                props.walk.points,
+                routeBoundsOptions(map.current),
+              );
             else if (props.start) map.current?.setView(props.start, 15);
           }}
         >
