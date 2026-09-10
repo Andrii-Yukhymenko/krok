@@ -361,7 +361,10 @@ export default function Planner() {
     setBusy(true);
     setMessage('');
     try {
-      const { walk: result, ranges } = await eraseBrush(edit, abort.signal);
+      const { walk: result, ranges } = await eraseBrush(
+        { ...edit, trimEnd: mode === 'draw' },
+        abort.signal,
+      );
       if (abort.signal.aborted) return;
       setEraseUndo({ ...snapshot, edited: result });
       setWalk(result);
@@ -386,7 +389,10 @@ export default function Planner() {
         setPoints(sampleSketch(result.points));
       }
       setMessage(
-        'Ділянку замінено пішохідним шляхом. За потреби скасуйте зміну.',
+        mode === 'draw' &&
+          ranges.some(([, b]) => b === edit.walk.points.length - 1)
+          ? 'Кінець маршруту стерто. Фініш перенесено до решти лінії.'
+          : 'Ділянку замінено пішохідним шляхом. За потреби скасуйте зміну.',
       );
     } catch (error) {
       if (!abort.signal.aborted)

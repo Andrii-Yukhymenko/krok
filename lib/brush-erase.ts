@@ -6,7 +6,7 @@ import {
   type Walk,
 } from './route.ts';
 export type EraseRange = [number, number];
-export type BrushEdit = { walk: Walk; ranges: EraseRange[] };
+export type BrushEdit = { walk: Walk; ranges: EraseRange[]; trimEnd?: boolean };
 export type Pixel = { x: number; y: number };
 export function segmentDistance(p: Pixel, a: Pixel, b: Pixel) {
   const dx = b.x - a.x,
@@ -111,7 +111,11 @@ export async function eraseBrush(
   route = walkingRoute,
 ): Promise<{ walk: Walk; ranges: EraseRange[] }> {
   const source = edit.walk;
-  const expanded = edit.ranges.map((r) => expandSpur(source.points, r));
+  const expanded = edit.ranges.map((r) =>
+    edit.trimEnd && r[1] === source.points.length - 1
+      ? r
+      : expandSpur(source.points, r),
+  );
   const ranges: EraseRange[] = [];
   for (const range of expanded) {
     const last = ranges.at(-1);
@@ -130,6 +134,19 @@ export async function eraseBrush(
       throw new Error(
         'Стерто весь маршрут. Зменште розмір стирачки або скасуйте рух.',
       );
+    if (edit.trimEnd && b === source.points.length - 1) {
+      const kept = result.points.slice(0, a + 1);
+      const total = sketchLength(result.points);
+      const fraction = total ? sketchLength(kept) / total : 0;
+      if (kept.length < 2 || fraction <= 0)
+        throw new Error('Залиште частину маршруту біля старту.');
+      result = {
+        points: kept,
+        meters: result.meters * fraction,
+        seconds: result.seconds * fraction,
+      };
+      continue;
+    }
     let bridge: Walk;
     if (distance(from, to) < 8)
       bridge = {

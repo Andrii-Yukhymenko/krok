@@ -257,9 +257,13 @@ export default function WalkMap(props: Props) {
         .addTo(group);
     const markers =
       props.mode === 'draw'
-        ? props.walk
-          ? [props.walk.points.at(-1)!]
-          : []
+        ? erasePreview !== null
+          ? erasePreview.at(-1)?.at(-1)
+            ? [erasePreview.at(-1)!.at(-1)!]
+            : []
+          : props.editableWalk
+            ? [props.editableWalk.points.at(-1)!]
+            : []
         : props.points;
     markers.forEach((p, i) => {
       if (
@@ -322,6 +326,8 @@ export default function WalkMap(props: Props) {
     props.pickingStart,
     props.suggestedPoints,
     props.erasing,
+    props.editableWalk,
+    erasePreview,
   ]);
   useEffect(() => {
     const L = api.current,

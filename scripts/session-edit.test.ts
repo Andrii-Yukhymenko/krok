@@ -161,3 +161,32 @@ void test('failed requests and aborted strokes leave source unchanged', async ()
   );
   assert.deepEqual(walk, copy);
 });
+void test('erasing a drawn finish trims the tail without rebuilding back to it', async () => {
+  const original = structuredClone(walk);
+  const { walk: shortened } = await eraseBrush(
+    { walk, ranges: [[2, 4]], trimEnd: true },
+    new AbortController().signal,
+    async () => {
+      throw new Error('must not route to erased finish');
+    },
+  );
+  assert.deepEqual(shortened.points, walk.points.slice(0, 3));
+  assert.deepEqual(shortened.points.at(-1), walk.points[2]);
+  assert.ok(shortened.meters < walk.meters);
+  assert.equal(
+    shortened.seconds / walk.seconds,
+    shortened.meters / walk.meters,
+  );
+  assert.equal(withReturn(shortened).meters, shortened.meters * 2);
+  assert.deepEqual(walk, original);
+});
+void test('erasing the entire drawn route leaves the original intact', async () => {
+  const original = structuredClone(walk);
+  await assert.rejects(
+    eraseBrush(
+      { walk, ranges: [[0, 4]], trimEnd: true },
+      new AbortController().signal,
+    ),
+  );
+  assert.deepEqual(walk, original);
+});
