@@ -66,6 +66,7 @@ const coords = (p: Point) => p.map((n) => n.toFixed(4)).join(', ');
 const today = () => new Date().toLocaleDateString('en-CA');
 
 export default function Planner() {
+  const pointBuildTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [erasing, setErasing] = useState(false);
   const [eraseUndo, setEraseUndo] = useState<{
     edited: Walk;
@@ -297,6 +298,7 @@ export default function Planner() {
       window.removeEventListener('beforeinstallprompt', before);
       window.removeEventListener('appinstalled', installed);
       controller.current?.abort();
+      if (pointBuildTimer.current) clearTimeout(pointBuildTimer.current);
     };
   }, []);
   useEffect(() => {
@@ -408,7 +410,9 @@ export default function Planner() {
       setMessage('Стирання скасовано. Маршрут залишено.');
     } else invalidate();
   }
-  function invalidate() {
+  function invalidate(keepWalk = false) {
+    if (pointBuildTimer.current) clearTimeout(pointBuildTimer.current);
+    pointBuildTimer.current = null;
     setErasing(false);
 
     setEraseUndo(null);
@@ -417,7 +421,7 @@ export default function Planner() {
     controller.current?.abort();
     controller.current = null;
     setBusy(false);
-    setWalk(null);
+    if (!keepWalk) setWalk(null);
     setMessage('');
     setRoutePlaces([]);
   }
@@ -476,6 +480,7 @@ export default function Planner() {
     origin = start,
     trace = sketch,
     accuracy = precision,
+    keepWalk = false,
   ) {
     cancelResize();
     if (!origin) {
@@ -490,7 +495,7 @@ export default function Planner() {
     const abort = new AbortController();
     controller.current = abort;
     setBusy(true);
-    setWalk(null);
+    if (!keepWalk) setWalk(null);
     setMessage('');
     setDrawing(false);
     setPanelOpen(false);
@@ -503,16 +508,17 @@ export default function Planner() {
     } catch (e) {
       if (!abort.signal.aborted)
         setMessage(
-          e instanceof Error && e.name !== 'TimeoutError'
+          (e instanceof Error && e.name !== 'TimeoutError'
             ? e.message
-            : 'Сервіс не відповів. Спробуйте ще раз.',
+            : 'Сервіс не відповів. Спробуйте ще раз.') +
+            (keepWalk && walk ? ' Показано попередній маршрут.' : ''),
         );
     } finally {
       if (controller.current === abort) setBusy(false);
     }
   }
   function onPoint(p: Point) {
-    if (busy) return;
+    if (resizing || (busy && mode !== 'point' && mode !== 'multi')) return;
     if (pickingStart || !start) return;
     if (mode === 'auto') {
       if (pointTool !== 'add') return;
@@ -526,14 +532,20 @@ export default function Planner() {
     }
     if (mode === 'draw') return;
     if (pointTool !== 'add') return;
-    invalidate();
     const next = mode === 'point' ? [p] : [...points, p];
     if (next.length > 18) {
       setMessage('До 18 точок на один маршрут.');
       return;
     }
+    invalidate(true);
     setPoints(next);
-    if (mode === 'point') void build(next);
+    setBusy(true);
+    // Coalesce rapid taps and abort superseded requests; all selected points
+    // stay visible immediately while only the newest route may be applied.
+    pointBuildTimer.current = setTimeout(() => {
+      pointBuildTimer.current = null;
+      void build(next, start, sketch, precision, true);
+    }, 350);
   }
   function movePoint(index: number, p: Point) {
     if (mode === 'auto') {
@@ -1150,6 +1162,11 @@ export default function Planner() {
               walk={shownWalk}
               drawing={drawing}
               pickingStart={pickingStart}
+              allowPointWhileBusy={
+                !resizing &&
+                (mode === 'point' || mode === 'multi') &&
+                pointTool === 'add'
+              }
               busy={busy || resizing}
               mode={mode}
               sketch={sketch}

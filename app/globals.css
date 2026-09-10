@@ -1553,7 +1553,7 @@ h1 span {
   .mobile-editing-summary strong { font-size: 15px; }
   .mobile-editing-summary span { font-size: 12px; color: #526d60; }
   .editing-map .mobile-notice { max-height: 30px; padding: 5px 8px; }
-  .mobile-editor-options[data-slot] { top: auto; bottom: 0; left: 0; transform: none; width: 100%; max-width: 100%; border-radius: 20px 20px 0 0; padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+  .mobile-editor-options[data-slot] { top: auto; bottom: 0; left: 0; transform: none; translate: none; --tw-translate-x: 0px; --tw-translate-y: 0px; width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; border-radius: 20px 20px 0 0; padding-bottom: max(20px, env(safe-area-inset-bottom)); }
 }
 @media (max-width: 700px) and (pointer: coarse) {
   .map-controls > button:nth-child(1), .map-controls > button:nth-child(2), .map-controls > span { display: none; }
@@ -1566,3 +1566,5 @@ h1 span {
 }
 
 .mobile-editor-options [data-slot="dialog-close"] { min-width: 44px; min-height: 44px; }
+
+.mobile-editor-options .editor-option, .mobile-editor-options select { min-width: 0; max-width: 100%; }

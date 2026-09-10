@@ -67,6 +67,7 @@ type Props = {
   drawing: boolean;
   pickingStart: boolean;
   busy: boolean;
+  allowPointWhileBusy: boolean;
   mode: string;
   sketch: Point[];
   onToggleDrawing: () => void;
@@ -162,7 +163,7 @@ export default function WalkMap(props: Props) {
             !latest.current.drawing &&
             !latest.current.pickingStart &&
             latest.current.start &&
-            !latest.current.busy
+            (!latest.current.busy || latest.current.allowPointWhileBusy)
           )
             latest.current.onPoint([e.latlng.lat, e.latlng.lng]);
         });
