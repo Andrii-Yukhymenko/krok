@@ -30,6 +30,7 @@ import {
   segmentDistance,
   type BrushEdit,
 } from '@/lib/brush-erase';
+import { bindDrawingGesture } from '@/lib/drawing-gesture';
 import { TouchGesture } from '@/lib/touch-gesture';
 import { isPoint } from '@/lib/session';
 import { directionLane, directionArrows } from '@/lib/route-display';
@@ -93,6 +94,7 @@ export default function WalkMap(props: Props) {
         api.current = L;
         const m = L.map(container.current, {
           zoomControl: false,
+          tapHold: false,
           attributionControl: true,
         }).setView(DEFAULT_START, 14);
         map.current = m;
@@ -422,112 +424,13 @@ export default function WalkMap(props: Props) {
       m.touchZoom.enable();
       return;
     }
-    m.dragging.disable();
-    m.doubleClickZoom.disable();
-    m.touchZoom.enable();
-    let points: Point[] = [],
-      line: Leaflet.Polyline | null = null,
-      active: number | null = null;
-    const fingers = new Set<number>();
-    let pinching = false,
-      panning = false;
-    const keydown = (event: KeyboardEvent) => {
-      if (
-        event.code !== 'Space' ||
-        active !== null ||
-        (event.target instanceof HTMLElement &&
-          event.target.closest('input,textarea,button,[contenteditable]'))
-      )
-        return;
-      event.preventDefault();
-      panning = true;
-      m.dragging.enable();
-      el.style.cursor = 'grab';
-    };
-    const keyup = (event: KeyboardEvent) => {
-      if (event.code !== 'Space' || !panning) return;
-      panning = false;
-      m.dragging.disable();
-      el.style.cursor = '';
-    };
-    const blur = () => {
-      panning = false;
-      m.dragging.disable();
-      el.style.cursor = '';
-    };
-    const point = (e: PointerEvent): Point => {
-      const ll = m.mouseEventToLatLng(e);
-      return [ll.lat, ll.lng];
-    };
-    const down = (e: PointerEvent) => {
-      if (e.pointerType === 'touch') {
-        fingers.add(e.pointerId);
-        if (fingers.size > 1) {
-          pinching = true;
-          active = null;
-          line?.remove();
-          points = [];
-          return;
-        }
-      }
-      if (panning || pinching || active !== null || e.button !== 0) return;
-      e.preventDefault();
-      active = e.pointerId;
-      el.setPointerCapture(e.pointerId);
-      points = [point(e)];
-      line = L.polyline(points, {
-        color: '#19785c',
-        weight: 4,
-        dashArray: '5 7',
-      }).addTo(m);
-    };
-    const move = (e: PointerEvent) => {
-      if (pinching || active !== e.pointerId) return;
-      e.preventDefault();
-      const p = point(e);
-      if (distance(points.at(-1)!, p) > 8) {
-        points.push(p);
-        line?.setLatLngs(points);
-      }
-    };
-    const finish = (e: PointerEvent) => {
-      fingers.delete(e.pointerId);
-      if (pinching) {
-        if (fingers.size === 0) pinching = false;
-        return;
-      }
-      if (active !== e.pointerId) return;
-      active = null;
-      line?.remove();
-      if (el.hasPointerCapture(e.pointerId))
-        el.releasePointerCapture(e.pointerId);
-      if (e.type === 'pointercancel') return;
-      points.push(point(e));
-      if (points.length > 2 && distance(points[0], points[1]) > 0)
-        latest.current.onSketch(points);
-      else latest.current.onError('Проведіть довшу лінію на карті.');
-    };
-    el.addEventListener('pointerdown', down);
-    el.addEventListener('pointermove', move);
-    el.addEventListener('pointerup', finish);
-    el.addEventListener('pointercancel', finish);
-    window.addEventListener('keydown', keydown);
-    window.addEventListener('keyup', keyup);
-    window.addEventListener('blur', blur);
-    return () => {
-      line?.remove();
-      el.removeEventListener('pointerdown', down);
-      el.removeEventListener('pointermove', move);
-      el.removeEventListener('pointerup', finish);
-      el.removeEventListener('pointercancel', finish);
-      window.removeEventListener('keydown', keydown);
-      window.removeEventListener('keyup', keyup);
-      window.removeEventListener('blur', blur);
-      el.style.cursor = '';
-      m.dragging.enable();
-      m.doubleClickZoom.enable();
-      m.touchZoom.enable();
-    };
+    return bindDrawingGesture(
+      m,
+      el,
+      L,
+      (p) => latest.current.onSketch(p),
+      (message) => latest.current.onError(message),
+    );
   }, [ready, props.drawing]);
   useEffect(() => {
     const m = map.current,
@@ -829,7 +732,13 @@ export default function WalkMap(props: Props) {
       }
       aria-label="Карта маршруту"
     >
-      <div className="map-canvas" ref={container} />
+      <div
+        className="map-canvas"
+        ref={container}
+        style={{
+          touchAction: props.drawing || props.erasing ? 'none' : undefined,
+        }}
+      />
       {props.erasing && (
         <div
           ref={brushCursor}
