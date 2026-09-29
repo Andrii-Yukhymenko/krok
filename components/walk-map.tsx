@@ -43,6 +43,7 @@ import { isPoint } from '@/lib/session';
 import { directionLane, directionArrows } from '@/lib/route-display';
 
 type Props = {
+  editing: boolean;
   erasing: boolean;
   editableWalk: Walk | null;
   onEraseStroke: (edit: BrushEdit) => Promise<void>;
@@ -80,7 +81,7 @@ type Props = {
 };
 function routeBoundsOptions(m: Leaflet.Map): Leaflet.FitBoundsOptions {
   return m.getSize().x <= 700
-    ? { paddingTopLeft: [18, 86], paddingBottomRight: [62, 130], maxZoom: 16 }
+    ? { paddingTopLeft: [24, 80], paddingBottomRight: [62, 24], maxZoom: 16 }
     : { padding: [50, 60], maxZoom: 16 };
 }
 export default function WalkMap(props: Props) {
@@ -413,9 +414,9 @@ export default function WalkMap(props: Props) {
       skipInitialStart.current = false;
       return;
     }
-    if (props.start && props.pointTool !== 'edit')
+    if (props.start && latest.current.pointTool !== 'edit')
       map.current?.setView(props.start, 15);
-  }, [ready, props.start, props.pointTool]);
+  }, [ready, props.start]);
   useEffect(() => {
     if (!ready) return;
     if (skipInitialFit.current) {
@@ -766,7 +767,8 @@ export default function WalkMap(props: Props) {
         'map-panel ' +
         (props.drawing ? 'is-drawing' : '') +
         (props.erasing ? ' is-erasing' : '') +
-        (props.pickingStart ? ' picking-start' : '')
+        (props.pickingStart ? ' picking-start' : '') +
+        (props.editing ? ' editor-open' : '')
       }
       aria-label="Карта маршруту"
     >
@@ -790,7 +792,7 @@ export default function WalkMap(props: Props) {
           }}
         />
       )}
-      {props.start && !props.pickingStart && (
+      {props.start && props.editing && !props.pickingStart && (
         <nav className="mobile-editor-bar" aria-label="Інструменти карти">
           <button
             disabled={props.busy}
@@ -809,30 +811,46 @@ export default function WalkMap(props: Props) {
             {props.mode === 'draw' ? <Pencil size={20} /> : <Plus size={20} />}
             <span>{props.mode === 'draw' ? 'Лінія' : 'Точки'}</span>
           </button>
-          <button
-            disabled={props.busy || !props.walk}
-            aria-pressed={mobileTool === 'erase'}
-            onClick={() => selectMobileTool('erase')}
-          >
-            <Eraser size={20} />
-            <span>Стирати</span>
-          </button>
+          {props.walk && (
+            <button
+              disabled={props.busy}
+              aria-pressed={mobileTool === 'erase'}
+              onClick={() => selectMobileTool('erase')}
+            >
+              <Eraser size={20} />
+              <span>Стирати</span>
+            </button>
+          )}
           <button
             disabled={props.busy}
             aria-pressed={mobileTool === 'move'}
             onClick={() => selectMobileTool('move')}
           >
             <Hand size={20} />
-            <span>Карта</span>
+            <span>Рухати</span>
           </button>
-          <button
-            disabled={props.busy || !props.canUndoErase}
-            onClick={props.onUndoErase}
-            aria-label="Скасувати останнє стирання"
-          >
-            <Undo2 size={20} />
-            <span>Назад</span>
-          </button>
+          {(props.canUndoErase ||
+            (props.mode !== 'draw' && props.points.length > 0)) && (
+            <button
+              disabled={props.busy}
+              onClick={() =>
+                props.canUndoErase
+                  ? props.onUndoErase()
+                  : selectMobileTool('edit')
+              }
+              aria-label={
+                props.canUndoErase
+                  ? 'Скасувати останнє стирання'
+                  : 'Перетягувати точки'
+              }
+              aria-pressed={
+                props.canUndoErase ? undefined : mobileTool === 'edit'
+              }
+            >
+              {props.canUndoErase ? <Undo2 size={20} /> : <Pencil size={20} />}
+              <span>{props.canUndoErase ? 'Назад' : 'Змінити'}</span>
+            </button>
+          )}
           <button
             onClick={() => setMobileOptions(true)}
             aria-label="Налаштування інструментів карти"

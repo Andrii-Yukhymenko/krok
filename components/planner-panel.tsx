@@ -5,7 +5,9 @@ import {
   SheetContent,
   SheetTitle,
   SheetDescription,
+  SheetClose,
 } from '@/components/ui/sheet';
+import { X } from 'lucide-react';
 function subscribe(callback: () => void) {
   const media = window.matchMedia('(max-width:700px)');
   media.addEventListener('change', callback);
@@ -28,12 +30,20 @@ export default function PlannerPanel({
   if (!mobile) return <aside className="planner-panel">{children}</aside>;
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="bottom" className="mobile-planner-sheet">
-        <SheetTitle className="sr-only">Планування прогулянки</SheetTitle>
+      <SheetContent
+        side="bottom"
+        className="mobile-planner-sheet"
+        showCloseButton={false}
+      >
+        <div className="planner-sheet-header">
+          <SheetTitle>Параметри прогулянки</SheetTitle>
+          <SheetClose className="icon-button" aria-label="Закрити параметри">
+            <X size={20} />
+          </SheetClose>
+        </div>
         <SheetDescription className="sr-only">
-          Старт, режими маршруту та денна ціль
+          Довжина, старт, спосіб побудови та повернення.
         </SheetDescription>
-        <div className="sheet-grip" aria-hidden="true" />
         <div className="planner-panel">{children}</div>
       </SheetContent>
     </Sheet>

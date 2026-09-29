@@ -1,11 +1,10 @@
 'use client';
-import Link from 'next/link';
-import { SESSION_KEY, readSession } from '@/lib/session';
+import { SESSION_KEY, readSession, type Session } from '@/lib/session';
 import { eraseBrush, type BrushEdit } from '@/lib/brush-erase';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
-  ArrowUpRight,
+  ChevronRight,
   Check,
   Footprints,
   LocateFixed,
@@ -23,7 +22,7 @@ import {
   RotateCcw,
   Info,
 } from 'lucide-react';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Slider } from '@/components/ui/slider';
 import ProfileForm from './profile-form';
 import { DEFAULT_HEIGHT, readProfile, strideFromHeight } from '@/lib/profile';
@@ -88,6 +87,10 @@ export default function Planner() {
     steps: number;
   } | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [dailyOpen, setDailyOpen] = useState(false);
+  const [lengthOpen, setLengthOpen] = useState(false);
+  const [editingRoute, setEditingRoute] = useState(false);
+  const [routeUndo, setRouteUndo] = useState<Session | null>(null);
   const [sketch, setSketch] = useState<Point[]>([]);
   const [mustVisit, setMustVisit] = useState<Point[]>([]);
   const [precision, setPrecision] = useState<SketchPrecision>('loose');
@@ -259,6 +262,8 @@ export default function Planner() {
         const saved = readSession(localStorage.getItem(SESSION_KEY));
         if (saved) {
           setStart(saved.start);
+          setPointTool(saved.walk ? 'move' : 'add');
+          setEditingRoute(!saved.walk);
           setStartLabel(saved.startLabel);
           setPoints(saved.points);
           setSketch(saved.sketch);
@@ -286,9 +291,9 @@ export default function Planner() {
     const installed = () => setInstall(null);
     window.addEventListener('beforeinstallprompt', before);
     window.addEventListener('appinstalled', installed);
-    if ('serviceWorker' in navigator && process.env.NODE_ENV === 'production')
+    if ('serviceWorker' in navigator && import.meta.env.PROD)
       navigator.serviceWorker
-        .register('/sw.js')
+        .register(import.meta.env.BASE_URL + 'sw.js')
         .catch(() =>
           setMessage('Автономний режим недоступний у цьому браузері.'),
         );
@@ -408,13 +413,12 @@ export default function Planner() {
     }
   }
   function cancelSearch() {
-    if (erasing && walk) {
-      controller.current?.abort();
-      controller.current = null;
-      setBusy(false);
-
-      setMessage('Стирання скасовано. Маршрут залишено.');
-    } else invalidate();
+    if (pointBuildTimer.current) clearTimeout(pointBuildTimer.current);
+    pointBuildTimer.current = null;
+    controller.current?.abort();
+    controller.current = null;
+    setBusy(false);
+    setMessage('Пошук скасовано. Можна повторити або почати новий маршрут.');
   }
   function invalidate(keepWalk = false) {
     if (pointBuildTimer.current) clearTimeout(pointBuildTimer.current);
@@ -432,6 +436,8 @@ export default function Planner() {
     setRoutePlaces([]);
   }
   function chooseStart(p: Point, label = 'Обрана точка') {
+    rememberRoute();
+    setLengthOpen(false);
     setMustVisit([]);
     setSelectedPoint(null);
     setPointTool('add');
@@ -445,6 +451,80 @@ export default function Planner() {
     setPoints([]);
     setSketch([]);
     setPanelOpen(false);
+    setEditingRoute(true);
+  }
+  function rememberRoute() {
+    if (!walk && !points.length && !sketch.length && !mustVisit.length) return;
+    setRouteUndo({
+      version: 1,
+      start,
+      startLabel,
+      points,
+      sketch,
+      mustVisit,
+      walk,
+      mode,
+      back,
+      precision,
+      ideaStyle,
+      routePlaces,
+    });
+  }
+  function newRoute() {
+    rememberRoute();
+    setLengthOpen(false);
+    gpsVersion.current++;
+    setGpsBusy(false);
+    invalidate();
+    setPoints([]);
+    setSketch([]);
+    setMustVisit([]);
+    setSelectedPoint(null);
+    setPointTool('add');
+    setDrawing(false);
+    setPickingStart(false);
+    setEditingRoute(true);
+    setPanelOpen(false);
+  }
+  function restoreRoute() {
+    if (!routeUndo) return;
+    gpsVersion.current++;
+    setGpsBusy(false);
+    invalidate();
+    setLengthOpen(false);
+    setStart(routeUndo.start);
+    setStartLabel(routeUndo.startLabel);
+    setPoints(routeUndo.points);
+    setSketch(routeUndo.sketch);
+    setMustVisit(routeUndo.mustVisit);
+    setWalk(routeUndo.walk);
+    setMode(routeUndo.mode);
+    setBack(routeUndo.back);
+    setPrecision(routeUndo.precision);
+    setIdeaStyle(routeUndo.ideaStyle);
+    setRoutePlaces(routeUndo.routePlaces ?? []);
+    setPointTool(routeUndo.walk ? 'move' : 'add');
+    setSelectedPoint(null);
+    setDrawing(false);
+    setPickingStart(false);
+    setEditingRoute(!routeUndo.walk);
+    setRouteUndo(null);
+    setPanelOpen(false);
+  }
+  function pickStart() {
+    gpsVersion.current++;
+    setGpsBusy(false);
+    setPickingStart(true);
+    setDrawing(false);
+    setErasing(false);
+    setPanelOpen(false);
+  }
+  function finishEditing() {
+    setEditingRoute(false);
+    setDrawing(false);
+    setErasing(false);
+    setPointTool('move');
+    setSelectedPoint(null);
   }
   function gps() {
     if (!navigator.geolocation) {
@@ -471,6 +551,9 @@ export default function Planner() {
     );
   }
   function changeMode(value: unknown) {
+    if (value === mode) return;
+    rememberRoute();
+    setLengthOpen(false);
     setMustVisit([]);
     setPointTool('add');
     setSelectedPoint(null);
@@ -480,6 +563,7 @@ export default function Planner() {
     setPoints([]);
     setDrawing(false);
     setPickingStart(false);
+    setEditingRoute(true);
   }
   async function build(
     input = points,
@@ -510,7 +594,10 @@ export default function Planner() {
         mode === 'draw'
           ? await sketchRoute(origin, trace, abort.signal, accuracy)
           : await walkingRoute([origin, ...input], abort.signal);
-      if (!abort.signal.aborted) setWalk(result);
+      if (!abort.signal.aborted) {
+        setWalk(result);
+        if (mode !== 'multi' && !walk) finishEditing();
+      }
     } catch (e) {
       if (!abort.signal.aborted)
         setMessage(
@@ -609,20 +696,18 @@ export default function Planner() {
       setMessage('Ціль уже близько! Збільште ціль для нової прогулянки.');
       return;
     }
+    rememberRoute();
     controller.current?.abort();
     const abort = new AbortController();
     controller.current = abort;
     setBusy(true);
-    setWalk(null);
     setMessage('');
-    setPoints([]);
     const target = (remaining * stride) / 100,
       bearing = Math.random() * 360;
     let radius = target / 6,
       best: Walk | null = null,
       bestPoints: Point[] = [];
     setPanelOpen(false);
-    setRoutePlaces([]);
     try {
       if (required.length) {
         const result = await requiredWalk(
@@ -637,6 +722,7 @@ export default function Planner() {
           setWalk(result.walk);
           setRoutePlaces(result.places);
           setMessage(result.notice);
+          finishEditing();
         }
         return;
       }
@@ -654,6 +740,7 @@ export default function Planner() {
           setWalk(result.walk);
           setRoutePlaces(result.places);
           setPoints([...result.places.map((p) => p.point), origin]);
+          finishEditing();
           if (Math.abs(result.walk.meters - target) / target > 0.1)
             setMessage(
               'Знайдено прогулянку через цікаві місця. Перевірте різницю з ціллю — точна довжина залежить від доріг.',
@@ -691,6 +778,8 @@ export default function Planner() {
       if (best && !abort.signal.aborted) {
         setWalk(best);
         setPoints(bestPoints);
+        setRoutePlaces([]);
+        finishEditing();
         if (Math.abs(best.meters - target) / target > 0.1)
           setMessage(
             'Знайдено найближчий варіант. Він відрізняється від цілі — перевірте кількість кроків або спробуйте інший.',
@@ -702,32 +791,355 @@ export default function Planner() {
           e instanceof Error ? e.message : 'Не вдалося знайти прогулянку.',
         );
     } finally {
-      if (controller.current === abort) setBusy(false);
+      if (controller.current === abort) {
+        setBusy(false);
+      }
     }
   }
-  const guidance = pickingStart
-    ? 'Наведіть приціл на місце старту'
-    : !start
-      ? 'Де почнемо прогулянку?'
-      : mode === 'draw'
-        ? 'Намалюйте свій шлях'
-        : mode === 'auto'
-          ? 'Прогулянка під вашу ціль'
-          : mode === 'multi'
-            ? 'Додайте зупинки по дорозі'
-            : 'Куди хочеться пройтися?';
+  const hasDraft =
+    !!walk || points.length > 0 || sketch.length > 0 || mustVisit.length > 0;
+  const choosingStart = pickingStart || !start;
+  const planning = !shownWalk || editingRoute;
+  const modeNames: Record<Mode, string> = {
+    point: 'До місця',
+    multi: 'Через зупинки',
+    draw: 'Малювати',
+    auto: 'Ідея',
+  };
+  const instruction = choosingStart
+    ? 'Пересуньте карту: приціл позначає майбутній старт.'
+    : erasing
+      ? 'Проведіть по зайвій ділянці. Два пальці рухають карту.'
+      : drawing
+        ? 'Малюйте одним пальцем. Відпустіть — знайдемо доріжки.'
+        : pointTool === 'edit' && editingRoute
+          ? 'Перетягніть старт або зупинку — шлях оновиться.'
+          : mode === 'multi' && editingRoute
+            ? 'Торкайтеся карти, щоб додати зупинки. Потім натисніть «Готово».'
+            : mode === 'auto' && planning
+              ? 'Знайдемо прогулянку під вашу ціль. Зупинки на карті — за бажанням.'
+              : mode === 'draw' && planning
+                ? 'Увімкніть малювання й проведіть лінію на карті.'
+                : mode === 'point' && planning
+                  ? 'Торкніться місця на карті — маршрут побудується сам.'
+                  : 'Маршрут готовий. Карту можна вільно пересувати.';
+  const modePicker = (
+    <Tabs value={mode} onValueChange={changeMode}>
+      <TabsList
+        className="mode-tabs journey-modes"
+        aria-label="Спосіб побудови"
+      >
+        <TabsTrigger value="point">
+          <MapPin />
+          <span>До місця</span>
+        </TabsTrigger>
+        <TabsTrigger value="multi">
+          <Route />
+          <span>Зупинки</span>
+        </TabsTrigger>
+        <TabsTrigger value="draw">
+          <Pencil />
+          <span>Малювати</span>
+        </TabsTrigger>
+        <TabsTrigger value="auto">
+          <Shuffle />
+          <span>Ідея</span>
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+  const routeActions = start && (
+    <div className={'journey-actions' + (!hasDraft ? ' single-action' : '')}>
+      {hasDraft && (
+        <button className="secondary-button" onClick={newRoute}>
+          <RotateCcw size={17} />
+          Новий маршрут
+        </button>
+      )}
+      <button
+        className="secondary-button"
+        onClick={pickStart}
+        disabled={busy || resizing}
+      >
+        <MapPin size={17} />
+        Змінити старт
+      </button>
+    </div>
+  );
+  const undoNotice = routeUndo && (
+    <output className="route-undo">
+      <span>Попередній маршрут</span>
+      <button onClick={restoreRoute}>
+        <Undo2 size={17} />
+        Повернути
+      </button>
+    </output>
+  );
+  const notices = (!online || message || placesNotice || storageError) && (
+    <details className="journey-notice">
+      <summary>
+        <Info size={17} />
+        <span>
+          {!online
+            ? 'Ви офлайн. Для побудови потрібен інтернет.'
+            : storageError
+              ? 'Не вдалося зберегти маршрут.'
+              : message || placesNotice}
+        </span>
+      </summary>
+      <p>
+        {[
+          message,
+          placesNotice,
+          storageError
+            ? 'Браузер не дозволяє зберегти дані. Після закриття маршрут може зникнути.'
+            : '',
+          !online
+            ? 'Збережений маршрут доступний. Для карти й нового шляху підключіться до інтернету.'
+            : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      </p>
+      <button
+        className="text-button"
+        onClick={() => {
+          const url = URL.createObjectURL(
+            new Blob([diagnosticReport()], { type: 'application/json' }),
+          );
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'kruh-diagnostics.json';
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }}
+      >
+        Зберегти звіт без координат
+      </button>
+    </details>
+  );
+  const summary = shownWalk && (
+    <div className="journey-summary" aria-live="polite">
+      <div className="journey-summary-top">
+        <strong>
+          ≈ {fmt(steps)} <span>кроків</span>
+        </strong>
+        <span className="journey-badge">
+          {editingRoute ? 'Редагування' : 'Готовий маршрут'}
+        </span>
+      </div>
+      <div className="journey-metrics">
+        <span>
+          <Ruler size={16} />
+          {(shownWalk.meters / 1000).toLocaleString('uk-UA', {
+            maximumFractionDigits: 2,
+          })}{' '}
+          км
+        </span>
+        <span>
+          <Clock3 size={16} />
+          {Math.round(shownWalk.seconds / 60)} хв
+        </span>
+        <span>{back || mode === 'auto' ? 'З поверненням' : 'В один бік'}</span>
+      </div>
+    </div>
+  );
+  const editorActions = shownWalk && !choosingStart && (
+    <div className="journey-actions">
+      <button
+        className={editingRoute ? 'primary-button' : 'secondary-button'}
+        disabled={busy || resizing}
+        onClick={() => {
+          if (editingRoute) finishEditing();
+          else {
+            setLengthOpen(false);
+            setEditingRoute(true);
+            setPointTool(mode === 'draw' ? 'move' : 'edit');
+            setPanelOpen(false);
+          }
+        }}
+      >
+        {editingRoute ? <Check size={18} /> : <Pencil size={18} />}
+        {editingRoute ? 'Готово' : 'Редагувати'}
+      </button>
+      <button
+        className={
+          'secondary-button length-toggle ' + (lengthOpen ? 'selected' : '')
+        }
+        disabled={busy || resizing}
+        aria-expanded={lengthOpen}
+        onClick={() => setLengthOpen(!lengthOpen)}
+      >
+        <Ruler size={18} />
+        Довжина
+      </button>
+    </div>
+  );
+  const mainAction =
+    busy || resizing ? (
+      <button
+        className="secondary-button pending-action"
+        onClick={resizing ? cancelResize : cancelSearch}
+      >
+        <span className="spinner" />
+        {resizing ? 'Підбираємо довжину…' : 'Будуємо маршрут…'}
+        <X size={18} />
+        <span className="sr-only">Скасувати пошук</span>
+      </button>
+    ) : !choosingStart && (!shownWalk || (mode === 'auto' && !editingRoute)) ? (
+      mode === 'auto' ? (
+        <button
+          className="primary-button"
+          disabled={!online}
+          onClick={() => void suggest()}
+        >
+          <Shuffle size={18} />
+          {shownWalk ? 'Інший варіант' : 'Знайти прогулянку'}
+        </button>
+      ) : mode === 'draw' && sketch.length > 0 && !drawing ? (
+        <button
+          className="primary-button"
+          disabled={!online}
+          onClick={() => void build()}
+        >
+          <Route size={18} /> Повторити побудову
+        </button>
+      ) : mode === 'draw' ? (
+        <button
+          className="primary-button"
+          disabled={!online}
+          onClick={() => {
+            setDrawing(!drawing);
+            setErasing(false);
+            setEditingRoute(true);
+            setPanelOpen(false);
+          }}
+        >
+          <Pencil size={18} />
+          {drawing
+            ? 'Завершити малювання'
+            : sketch.length
+              ? 'Продовжити малювання'
+              : 'Малювати маршрут'}
+        </button>
+      ) : points.length > 0 ? (
+        <button
+          className="primary-button"
+          disabled={!online}
+          onClick={() => void build()}
+        >
+          <Route size={18} />
+          Повторити побудову
+        </button>
+      ) : null
+    ) : null;
+  const startTools = (
+    <div className="journey-start-tools">
+      <button
+        className="secondary-button"
+        disabled={gpsBusy || busy || resizing}
+        onClick={gps}
+      >
+        <LocateFixed size={18} />
+        {gpsBusy ? 'Шукаємо місце…' : 'Моє місце'}
+      </button>
+      {start && pickingStart ? (
+        <button
+          className="secondary-button"
+          onClick={() => {
+            gpsVersion.current++;
+            setGpsBusy(false);
+            setPickingStart(false);
+          }}
+        >
+          <X size={18} />
+          Скасувати вибір
+        </button>
+      ) : (
+        <button
+          className="secondary-button"
+          disabled={busy || resizing}
+          onClick={pickStart}
+        >
+          <MapPin size={18} />
+          Обрати на карті
+        </button>
+      )}
+    </div>
+  );
+  const goalCard = (
+    <div className="goal-card">
+      <div className="row">
+        <span>
+          <Flag size={16} />
+          Ціль на сьогодні
+        </span>
+        <button
+          onClick={() => {
+            setDailyOpen(false);
+            setSettings(true);
+          }}
+          aria-label="Змінити денну ціль"
+        >
+          <Settings2 size={18} />
+        </button>
+      </div>
+      <div className="goal-number">
+        {fmt(remaining)} <span>кроків залишилось</span>
+      </div>
+      <span id="daily-steps-label" className="sr-only">
+        Пройдено сьогодні, кроків
+      </span>
+      <Slider
+        className="daily-steps-slider"
+        value={[done]}
+        min={0}
+        max={sliderMax}
+        step={1}
+        largeStep={100}
+        aria-labelledby="daily-steps-label"
+        onValueChange={(value) =>
+          setDone(Array.isArray(value) ? value[0] : value)
+        }
+      />
+      <div className="goal-meta">
+        <span aria-live="polite">Пройдено {fmt(done)}</span>
+        <span>Ціль {fmt(goal)}</span>
+      </div>
+    </div>
+  );
   return (
-    <main className="app-shell">
+    <main className="app-shell journey-shell">
       <header className="topbar">
-        <Link className="brand" href="/" aria-label="Крок — головна">
+        <a
+          className="brand"
+          href={import.meta.env.BASE_URL}
+          aria-label="Круг — головна"
+        >
           <span className="brand-icon">
             <Footprints size={25} />
           </span>
           <span>
-            крок<span className="brand-dot">.</span>
+            круг<span className="brand-dot">.</span>
           </span>
-        </Link>
-        <div className="header-note">Маленькі кроки. Ваші маршрути.</div>
+        </a>
+        <button
+          className="daily-progress-button"
+          onClick={() => setDailyOpen(true)}
+          aria-label="Кроки й денна ціль"
+        >
+          <Footprints size={18} />
+          <span>
+            <strong>{fmt(done)}</strong> / {fmt(goal)}
+          </span>
+          <span className="daily-progress-track" aria-hidden="true">
+            <span
+              style={{
+                width: Math.min(100, goal ? (done / goal) * 100 : 0) + '%',
+              }}
+            />
+          </span>
+        </button>
         <div className="header-actions">
           <button
             className="quiet-button install-button"
@@ -753,381 +1165,149 @@ export default function Planner() {
       </header>
       <div className="workspace">
         <PlannerPanel open={panelOpen} onOpenChange={setPanelOpen}>
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">ВАША ЩОДЕННА ПРОГУЛЯНКА</p>
-              <h1>
-                Вийдемо на <span>прогулянку?</span>
-              </h1>
-            </div>
-            <span className="heading-icon">
-              <ArrowUpRight size={25} />
-            </span>
+          <div className="journey-panel-heading">
+            <h1>{shownWalk ? 'Ваша прогулянка' : 'Новий маршрут'}</h1>
+            <span>{modeNames[mode]}</span>
           </div>
-          <div className="goal-card">
-            <div className="row">
-              <span>
-                <Flag size={15} /> Ціль на сьогодні
-              </span>
-              <button
-                onClick={() => setSettings(true)}
-                aria-label="Змінити денну ціль"
-              >
-                <Settings2 size={16} />
-              </button>
-            </div>
-            <div className="goal-number">
-              {fmt(remaining)} <span>кроків залишилось</span>
-            </div>
-            <span id="daily-steps-label" className="sr-only">
-              Пройдено сьогодні, кроків
-            </span>
-            <Slider
-              className="daily-steps-slider"
-              value={[done]}
-              min={0}
-              max={sliderMax}
-              step={1}
-              largeStep={100}
-              aria-labelledby="daily-steps-label"
-              onValueChange={(value) =>
-                setDone(Array.isArray(value) ? value[0] : value)
-              }
-            />
-            <div className="goal-meta">
-              <span aria-live="polite">Пройдено {fmt(done)}</span>
-              <span>Ціль {fmt(goal)}</span>
-            </div>
+          {summary}
+          {notices}
+          {undoNotice}
+          <div className="desktop-journey-actions">
+            {editorActions}
+            {mainAction}
+            {routeActions}
           </div>
-          <div className="section-label">
-            <span className="step-index">01</span>
-            <h2>Звідки вирушаємо</h2>
-          </div>
-          <div className="start-card">
-            <span className="start-symbol" />
-            <div>
-              <strong>{startLabel}</strong>
-              <small>{start ? coords(start) : 'GPS або точка на карті'}</small>
-            </div>
-            {start && <Check size={18} className="green" />}
-          </div>
-          <div className="start-actions">
-            <button
-              className="secondary-button"
-              disabled={gpsBusy || busy}
-              onClick={gps}
-            >
-              <LocateFixed size={16} />
-              {gpsBusy ? 'Шукаємо…' : 'Моє місце'}
-            </button>
-            <button
-              className={'secondary-button ' + (pickingStart ? 'selected' : '')}
-              disabled={busy}
-              onClick={() => {
-                gpsVersion.current++;
-                setGpsBusy(false);
-                setPickingStart(!pickingStart);
-                setDrawing(false);
-                setPanelOpen(false);
-              }}
-            >
-              <MapPin size={16} />
-              {pickingStart ? 'Скасувати вибір' : 'На карті'}
-            </button>
-          </div>
-          {!start && (
-            <button
-              className="text-button demo-start"
-              onClick={() =>
-                chooseStart(DEFAULT_START, 'Майдан Незалежності, Київ')
-              }
-            >
-              Спробувати зі стартом у Києві <ArrowRight size={14} />
-            </button>
-          )}
-          <div className="section-label">
-            <span className="step-index">02</span>
-            <h2>Як прокладемо маршрут</h2>
-          </div>
-          <Tabs value={mode} onValueChange={changeMode}>
-            <TabsList className="mode-tabs">
-              <TabsTrigger value="point">
-                <MapPin />
-                <span>До точки</span>
-              </TabsTrigger>
-              <TabsTrigger value="multi">
-                <Route />
-                <span>Точки</span>
-              </TabsTrigger>
-              <TabsTrigger value="draw">
-                <Pencil />
-                <span>Малювати</span>
-              </TabsTrigger>
-              <TabsTrigger value="auto">
-                <Shuffle />
-                <span>Ідея</span>
-              </TabsTrigger>
-            </TabsList>
-            <div className="mode-description">
-              <TabsContent value="point">
-                Оберіть місце на карті — знайдемо пішохідний шлях до нього.
-              </TabsContent>
-              <TabsContent value="multi">
-                Поставте кілька точок. Пройдемо їх у тому порядку, як ви обрали.
-              </TabsContent>
-              <TabsContent value="draw">
-                Проведіть лінію — маршрут побудується автоматично. Це напрямок
-                прогулянки, а не обов’язкові зупинки.
-              </TabsContent>
-              <TabsContent value="auto">
-                Знайдемо парки, сквери й пішохідні місця поруч та з’єднаємо їх у
-                прогулянку з поверненням.
-              </TabsContent>
-            </div>
-          </Tabs>
-          {mode === 'auto' && (
-            <p className="notice">
-              Додайте на карті до 6 зупинок, які хочете відвідати. Порядок — як
-              додавали; повернення до старту включено. Обрано:{' '}
-              {mustVisit.length}.
-            </p>
-          )}
-          {mode === 'auto' && (
-            <Tabs
-              value={ideaStyle}
-              onValueChange={(v) => {
-                setIdeaStyle(String(v));
-                invalidate();
-                ideaVariation.current = 0;
-              }}
-            >
-              <TabsList className="idea-tabs">
-                <TabsTrigger value="scenic">Парки й цікаві місця</TabsTrigger>
-                <TabsTrigger value="random">Випадкова</TabsTrigger>
-              </TabsList>
-            </Tabs>
-          )}
-          {mode !== 'auto' && (
-            <label className="return-option" htmlFor="return-switch">
-              <span>
-                <RotateCcw size={17} />
-                Повернутися тим самим шляхом
-              </span>
-              <Switch
-                id="return-switch"
-                checked={back}
-                onCheckedChange={(value) => {
-                  cancelResize();
-                  setBack(value);
-                }}
-                aria-label="Повернутися тим самим шляхом"
-              />
-            </label>
-          )}
-          {mode === 'draw' && (
-            <button
-              className={
-                'secondary-button draw-button ' + (drawing ? 'selected' : '')
-              }
-              disabled={!start || busy}
-              onClick={() => {
-                setDrawing(!drawing);
-                setPickingStart(false);
-                setPanelOpen(false);
-              }}
-            >
-              <Pencil size={16} />
-              {drawing ? 'Готово, переміщувати карту' : 'Малювати на карті'}
-            </button>
-          )}
-          {points.length > 0 && mode !== 'auto' && (
-            <div className="route-edit">
-              <span>
-                {mode === 'draw' ? 'Ескіз готовий' : `Точок: ${points.length}`}
-              </span>
-              <button
-                aria-label="Скасувати останню точку"
-                disabled={busy}
-                onClick={() => {
-                  invalidate();
-                  setPoints(mode === 'draw' ? [] : points.slice(0, -1));
-                  if (mode === 'draw') setSketch([]);
-                }}
-              >
-                <Undo2 size={17} />
-              </button>
-              <button
-                aria-label="Очистити маршрут"
-                onClick={() => {
-                  invalidate();
-                  setPoints([]);
-                  setSketch([]);
-                  setDrawing(false);
-                }}
-              >
-                <X size={17} />
-              </button>
-            </div>
-          )}
-          {(mode !== 'draw' || (points.length > 0 && !walk && !busy)) && (
-            <button
-              className="primary-button"
-              disabled={
-                busy || !online || !start || (mode !== 'auto' && !points.length)
-              }
-              onClick={() => (mode === 'auto' ? void suggest() : void build())}
-            >
-              {busy ? (
-                <>
-                  <span className="spinner" /> Шукаємо пішохідний шлях…
-                </>
-              ) : (
-                <>
-                  {mode === 'auto'
-                    ? walk
-                      ? 'Інша прогулянка'
-                      : 'Запропонувати прогулянку'
-                    : mode === 'draw'
-                      ? 'Повторити побудову'
-                      : 'Побудувати маршрут'}
-                  <ArrowRight size={19} />
-                </>
-              )}
-            </button>
-          )}
-          {busy && (
-            <button className="text-button" onClick={cancelSearch}>
-              Скасувати пошук
-            </button>
-          )}
-          <output aria-live="polite">
-            {storageError && (
-              <p className="notice" role="alert">
-                Браузер не дозволяє зберегти дані. Після закриття маршрут може
-                зникнути.
+          {shownWalk && (
+            <>
+              {lengthControl}
+              <p className="length-help">
+                {mode === 'draw'
+                  ? 'Скорочення перемістить фініш уздовж вашої лінії.'
+                  : 'Зупинки збережуться. Точна довжина залежить від доріг.'}
               </p>
-            )}
-            {placesNotice && <p className="notice">{placesNotice}</p>}
-            {(!online || message) && (
-              <p className="notice">
-                {!online
-                  ? 'Ви офлайн. Для карти й нових маршрутів потрібен інтернет.'
-                  : message}
-              </p>
-            )}
-          </output>
-          {(message || placesNotice || !online) && (
-            <button
-              className="text-button"
-              onClick={() => {
-                const url = URL.createObjectURL(
-                  new Blob([diagnosticReport()], { type: 'application/json' }),
-                );
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'krok-diagnostics.json';
-                a.click();
-                setTimeout(() => URL.revokeObjectURL(url), 1000);
-              }}
-            >
-              Зберегти звіт без координат
-            </button>
+            </>
           )}
-          <div className="result-card" aria-live="polite">
-            {shownWalk ? (
+          <section className="journey-section">
+            <h2>Старт прогулянки</h2>
+            <div className="start-card">
+              <span className="start-symbol" />
+              <div>
+                <strong>{startLabel}</strong>
+                <small>
+                  {start
+                    ? coords(start)
+                    : 'Оберіть своє місце або точку на карті'}
+                </small>
+              </div>
+              {start && <Check size={18} className="green" />}
+            </div>
+            {startTools}
+            {!start && (
+              <button
+                className="text-button demo-start"
+                onClick={() =>
+                  chooseStart(DEFAULT_START, 'Майдан Незалежності, Київ')
+                }
+              >
+                Спробувати в Києві <ArrowRight size={16} />
+              </button>
+            )}
+          </section>
+          <section className="journey-section">
+            <h2>Спосіб побудови</h2>
+            {modePicker}
+            <p className="journey-help">{instruction}</p>
+            {mode === 'auto' ? (
               <>
-                <div className="result-top">
-                  <span>
-                    <span className="live-dot" /> Ваш маршрут
-                  </span>
-                  <span>
-                    {back || mode === 'auto' ? 'Туди й назад' : 'В один бік'}
-                  </span>
-                </div>
-                <div className="result-steps">
-                  ≈ {fmt(steps)}
-                  <span>кроків</span>
-                </div>
-                <div className="result-metrics">
-                  <span>
-                    <Ruler size={17} />
-                    {(shownWalk.meters / 1000).toLocaleString('uk-UA', {
-                      maximumFractionDigits: 2,
-                    })}{' '}
-                    км
-                  </span>
-                  <span>
-                    <Clock3 size={17} />
-                    {Math.round(shownWalk.seconds / 60)} хв
-                  </span>
-                </div>
-                {lengthControl}
-                <p className="length-help">
-                  {mode === 'draw'
-                    ? 'Контур змінюється цілісно; короткі тупики відсіюються, а подовження шукає парки й прогулянкові місця поруч.'
-                    : 'Зупинки зберігаються. Бажана довжина може бути недосяжною.'}
-                </p>
-                {routePlaces.length > 0 && (
-                  <div className="route-places">
-                    <p>
-                      Повторне проходження: ≈{' '}
-                      {Math.round(repeatedRatio(walk!) * 100)}% шляху. Оцінка за
-                      збігами лінії.
-                    </p>
-                    {routePlaces.map((place) => (
-                      <a
-                        key={place.id}
-                        href={'https://www.openstreetmap.org/' + place.id}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <span>{place.kind}</span>
-                        <strong>{place.name}</strong>
-                      </a>
-                    ))}
-                  </div>
-                )}
-                <p className="goal-comparison">
-                  {Math.abs(remaining - steps) < 100
-                    ? 'Майже точно під вашу ціль'
-                    : steps < remaining
-                      ? `Ще ${fmt(remaining - steps)} кроків до цілі`
-                      : `На ${fmt(steps - remaining)} кроків понад ціль`}
+                <Tabs
+                  value={ideaStyle}
+                  onValueChange={(value) => {
+                    rememberRoute();
+                    setIdeaStyle(String(value));
+                    invalidate();
+                    setEditingRoute(true);
+                    setPointTool('add');
+                    ideaVariation.current = 0;
+                  }}
+                >
+                  <TabsList className="idea-tabs">
+                    <TabsTrigger value="scenic">
+                      Парки й цікаві місця
+                    </TabsTrigger>
+                    <TabsTrigger value="random">Випадкова</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+                <p className="journey-help">
+                  З поверненням до старту. Обов’язкових зупинок:{' '}
+                  {mustVisit.length} із 6.
                 </p>
               </>
             ) : (
-              <div className="empty-result">
-                <Footprints size={25} />
-                <div>
-                  <strong>Ваші кроки починаються тут</strong>
-                  <p>
-                    Побудуйте маршрут, щоб побачити дистанцію, час і кількість
-                    кроків.
-                  </p>
-                </div>
-              </div>
+              <label className="return-option" htmlFor="return-switch">
+                <span>
+                  <RotateCcw size={17} />
+                  Повернутися тим самим шляхом
+                </span>
+                <Switch
+                  id="return-switch"
+                  checked={back}
+                  onCheckedChange={(value) => {
+                    cancelResize();
+                    setBack(value);
+                  }}
+                  aria-label="Повернутися тим самим шляхом"
+                />
+              </label>
             )}
-          </div>
+          </section>
+          {routePlaces.length > 0 && (
+            <section className="journey-section route-places">
+              <h2>Місця на шляху</h2>
+              {routePlaces.map((place) => (
+                <a
+                  key={place.id}
+                  href={'https://www.openstreetmap.org/' + place.id}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <span>{place.kind}</span>
+                  <strong>{place.name}</strong>
+                </a>
+              ))}
+              <p className="journey-help">
+                Повторне проходження: ≈ {Math.round(repeatedRatio(walk!) * 100)}
+                % шляху.
+              </p>
+            </section>
+          )}
           <p className="panel-footnote">
-            <Info size={14} />
-            Оцінка за довжиною кроку {stride} см. Це планувальник, а не
-            лічильник руху.
+            <Info size={15} />
+            Оцінка за довжиною кроку {stride} см. Кроки не рахуються
+            автоматично.
           </p>
+          <button
+            className="primary-button mobile-panel-done"
+            onClick={() => setPanelOpen(false)}
+          >
+            <Check size={18} />
+            До карти
+          </button>
         </PlannerPanel>
         <div
           className={'map-area' + (drawing || erasing ? ' editing-map' : '')}
         >
           {loaded && (
             <WalkMap
+              editing={editingRoute}
               erasing={erasing}
               editableWalk={walk}
               onEraseStroke={eraseStroke}
               onToggleEraser={() => {
                 setMessage('');
                 setErasing(!erasing);
-
                 setDrawing(false);
                 setPickingStart(false);
+                setEditingRoute(true);
                 setPanelOpen(false);
               }}
               canUndoErase={!!eraseUndo && eraseUndo.edited === walk}
@@ -1140,24 +1320,22 @@ export default function Planner() {
                 setMustVisit(eraseUndo.mustVisit);
                 setRoutePlaces(eraseUndo.places);
                 setEraseUndo(null);
-
                 setMessage('Редагування скасовано.');
               }}
               lockViewport={resizeTarget !== null || erasing}
               suggestedPoints={routePlaces.map((p) => p.point)}
               pointTool={pointTool}
               selectedPoint={selectedPoint}
-              onPointTool={setPointTool}
+              onPointTool={(tool) => {
+                setPointTool(tool);
+                setErasing(false);
+                setDrawing(false);
+              }}
               onSelectPoint={setSelectedPoint}
               onMovePoint={movePoint}
               onRemovePoint={removePoint}
               onBuild={() => (mode === 'auto' ? void suggest() : void build())}
-              onClearPoints={() => {
-                if (mode === 'auto') setMustVisit([]);
-                invalidate();
-                setPoints([]);
-                setSelectedPoint(null);
-              }}
+              onClearPoints={newRoute}
               precision={precision}
               onPrecision={(value) => {
                 setPrecision(value);
@@ -1179,14 +1357,12 @@ export default function Planner() {
               onToggleDrawing={() => {
                 setMessage('');
                 setErasing(false);
-
                 setDrawing(!drawing);
                 setPickingStart(false);
+                setEditingRoute(true);
               }}
               onNewSketch={() => {
-                invalidate();
-                setSketch([]);
-                setPoints([]);
+                newRoute();
                 setDrawing(true);
               }}
               onConfirmStart={(p) => chooseStart(p)}
@@ -1204,76 +1380,98 @@ export default function Planner() {
               onError={setMessage}
             />
           )}
-          <div className="mobile-map-dock">
-            <div className="mobile-editing-summary">
-              <strong>{erasing ? 'Стирання' : 'Малювання'}</strong>
-              <span>Два пальці — рух і масштаб</span>
-            </div>
-            <div className="mobile-route-summary" aria-live="polite">
-              <strong>
-                {busy
-                  ? 'Будуємо маршрут…'
-                  : shownWalk
-                    ? `≈ ${fmt(steps)} кроків`
-                    : `До цілі: ${fmt(remaining)} кроків`}
-              </strong>
-              <span>
-                {shownWalk
-                  ? `${(shownWalk.meters / 1000).toLocaleString('uk-UA', { maximumFractionDigits: 2 })} км · ${Math.round(shownWalk.seconds / 60)} хв`
-                  : 'Оберіть старт і спосіб прогулянки'}
-              </span>
-            </div>
-            <button
-              className="primary-button"
-              onClick={() => setPanelOpen(true)}
-            >
-              <Settings2 size={18} />
-              Маршрут
-            </button>
-            {(!online || message || placesNotice || storageError) && (
-              <button
-                className="mobile-notice"
-                onClick={() => setPanelOpen(true)}
-                aria-label="Відкрити повідомлення про маршрут"
-              >
-                {!online
-                  ? 'Ви офлайн. Потрібен інтернет.'
-                  : [
-                      storageError
-                        ? 'Браузер не дозволяє зберегти маршрут.'
-                        : '',
-                      message,
-                      placesNotice,
-                    ]
-                      .filter(Boolean)
-                      .join(' ')}
-              </button>
+          <section className="mobile-map-dock" aria-label="Керування маршрутом">
+            {undoNotice}
+            {choosingStart ? (
+              <>
+                <div className="dock-heading">
+                  <h2>{start ? 'Новий старт' : 'Де почнемо?'}</h2>
+                  <span>
+                    {start
+                      ? 'Маршрут зміниться після підтвердження'
+                      : 'Оберіть місце на карті або GPS'}
+                  </span>
+                </div>
+                {startTools}
+                {!start && (
+                  <button
+                    className="text-button demo-start"
+                    onClick={() =>
+                      chooseStart(DEFAULT_START, 'Майдан Незалежності, Київ')
+                    }
+                  >
+                    Спробувати в Києві <ArrowRight size={15} />
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                {summary || (
+                  <div className="dock-heading">
+                    <h2>Куди підемо?</h2>
+                    <span>До денної цілі: {fmt(remaining)} кроків</span>
+                  </div>
+                )}
+                {!shownWalk && modePicker}
+                {lengthOpen && shownWalk && (
+                  <div className="dock-length-control">{lengthControl}</div>
+                )}
+                {(planning || busy || resizing) && (
+                  <p className="dock-instruction" aria-live="polite">
+                    {busy ? 'Шукаємо пішохідні доріжки…' : instruction}
+                  </p>
+                )}
+                {mainAction}
+                {editorActions}
+                {routeActions}
+                <button
+                  className="dock-details"
+                  onClick={() => setPanelOpen(true)}
+                >
+                  <span>
+                    {shownWalk ? 'Деталі та параметри' : 'Параметри прогулянки'}
+                  </span>
+                  <ChevronRight size={17} />
+                </button>
+              </>
             )}
-            {busy && (
-              <button className="text-button" onClick={cancelSearch}>
-                Скасувати пошук
-              </button>
-            )}
-          </div>
+            {notices}
+          </section>
           <div className="map-bottom-tip">
             <span className="tip-icon">
               {mode === 'draw' ? <Pencil size={20} /> : <MapPin size={20} />}
             </span>
             <div>
-              <strong>{guidance}</strong>
-              <span>
-                {pickingStart || !start
-                  ? 'Пересуньте карту й натисніть «Підтвердити старт тут»'
-                  : mode === 'auto'
-                    ? 'Натисніть кнопку — знайдемо варіант для вас'
-                    : mode === 'draw'
-                      ? 'Малюйте приблизно — дороги підберемо ми'
-                      : 'Торкніться карти, щоб обрати місце'}
-              </span>
+              <strong>
+                {choosingStart
+                  ? 'Оберіть старт'
+                  : shownWalk
+                    ? 'Ваша прогулянка'
+                    : modeNames[mode]}
+              </strong>
+              <span>{instruction}</span>
             </div>
           </div>
         </div>
       </div>
+      <Dialog open={dailyOpen} onOpenChange={setDailyOpen}>
+        <DialogContent className="settings-dialog daily-dialog">
+          <DialogTitle className="dialog-title">
+            Ваші кроки сьогодні
+          </DialogTitle>
+          <DialogDescription>
+            Вкажіть, скільки вже пройшли. Ці кроки врахуємо в ідеї прогулянки.
+          </DialogDescription>
+          {goalCard}
+          <button
+            className="primary-button"
+            onClick={() => setDailyOpen(false)}
+          >
+            <Check size={18} />
+            Готово
+          </button>
+        </DialogContent>
+      </Dialog>
       <Dialog open={settings} onOpenChange={setSettings}>
         <DialogContent className="settings-dialog">
           <DialogTitle className="dialog-title">Ваш ритм</DialogTitle>
@@ -1359,7 +1557,7 @@ export default function Planner() {
       <Dialog open={help} onOpenChange={setHelp}>
         <DialogContent className="settings-dialog">
           <DialogTitle className="dialog-title">
-            Крок на вашому телефоні
+            Круг на вашому телефоні
           </DialogTitle>
           <DialogDescription>
             Відкривайте планувальник просто з домашнього екрана.
