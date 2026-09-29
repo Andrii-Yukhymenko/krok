@@ -1,8 +1,8 @@
-# Круг / Kruh
+# Крок / Krok
 
 Україномовний MVP планувальника пішохідних прогулянок із встановленням як PWA.
 
-Сайт: [Круг](https://andrii-yukhymenko.github.io/kruh/).
+Сайт: [Крок](https://andrii-yukhymenko.github.io/krok/).
 
 ## Розробка у WSL
 
@@ -34,11 +34,11 @@ Service worker реєструється тільки в production. Збірка
 Для перевірки адреси в підпапці:
 
 ```sh
-APP_BASE_PATH=/kruh/ npm run build
-APP_BASE_PATH=/kruh/ npm start
+APP_BASE_PATH=/krok/ npm run build
+APP_BASE_PATH=/krok/ npm start
 ```
 
-Відкрити http://localhost:4173/kruh/. Для звичайної локальної розробки залишити `APP_BASE_PATH=/` (це значення за замовчуванням). Маніфест, іконки та service worker підтримують підпапки; кеш PWA ізольований за шляхом застосунку.
+Відкрити http://localhost:4173/krok/. Для звичайної локальної розробки залишити `APP_BASE_PATH=/` (це значення за замовчуванням). Маніфест, іконки та service worker підтримують підпапки; кеш PWA ізольований за шляхом застосунку.
 
 Коли будете готові до публікації:
 

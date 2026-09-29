@@ -909,7 +909,7 @@ export default function Planner() {
           );
           const a = document.createElement('a');
           a.href = url;
-          a.download = 'kruh-diagnostics.json';
+          a.download = 'krok-diagnostics.json';
           a.click();
           setTimeout(() => URL.revokeObjectURL(url), 1000);
         }}
@@ -1114,13 +1114,13 @@ export default function Planner() {
         <a
           className="brand"
           href={import.meta.env.BASE_URL}
-          aria-label="Круг — головна"
+          aria-label="Крок — головна"
         >
           <span className="brand-icon">
             <Footprints size={25} />
           </span>
           <span>
-            круг<span className="brand-dot">.</span>
+            крок<span className="brand-dot">.</span>
           </span>
         </a>
         <button
@@ -1557,7 +1557,7 @@ export default function Planner() {
       <Dialog open={help} onOpenChange={setHelp}>
         <DialogContent className="settings-dialog">
           <DialogTitle className="dialog-title">
-            Круг на вашому телефоні
+            Крок на вашому телефоні
           </DialogTitle>
           <DialogDescription>
             Відкривайте планувальник просто з домашнього екрана.

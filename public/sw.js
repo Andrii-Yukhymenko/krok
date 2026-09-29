@@ -59,7 +59,7 @@ self.addEventListener('fetch', (event) => {
           async () =>
             (await caches.match(APP_ROOT.href)) ||
             new Response(
-              'Відкрийте Круг з інтернетом перед використанням офлайн.',
+              'Відкрийте Крок з інтернетом перед використанням офлайн.',
               { headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
             ),
         ),
