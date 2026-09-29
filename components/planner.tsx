@@ -5,6 +5,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Check,
   Footprints,
   LocateFixed,
@@ -63,6 +65,7 @@ type InstallEvent = Event & {
 const fmt = (n: number) => new Intl.NumberFormat('uk-UA').format(n);
 const coords = (p: Point) => p.map((n) => n.toFixed(4)).join(', ');
 const today = () => new Date().toLocaleDateString('en-CA');
+const DOCK_COLLAPSED_KEY = 'krok-map-dock-collapsed';
 
 export default function Planner() {
   const pointBuildTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -87,6 +90,7 @@ export default function Planner() {
     steps: number;
   } | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [dockCollapsed, setDockCollapsed] = useState(false);
   const [dailyOpen, setDailyOpen] = useState(false);
   const [lengthOpen, setLengthOpen] = useState(false);
   const [editingRoute, setEditingRoute] = useState(false);
@@ -244,6 +248,11 @@ export default function Planner() {
   useEffect(() => {
     queueMicrotask(() => {
       try {
+        setDockCollapsed(localStorage.getItem(DOCK_COLLAPSED_KEY) === 'true');
+      } catch {
+        setStorageError(true);
+      }
+      try {
         const raw = JSON.parse(localStorage.getItem('krok-settings') || '{}');
         const profile = readProfile(raw ?? {}, today());
         setHeight(profile.height);
@@ -306,6 +315,14 @@ export default function Planner() {
       if (pointBuildTimer.current) clearTimeout(pointBuildTimer.current);
     };
   }, []);
+  useEffect(() => {
+    if (!loaded) return;
+    try {
+      localStorage.setItem(DOCK_COLLAPSED_KEY, String(dockCollapsed));
+    } catch {
+      queueMicrotask(() => setStorageError(true));
+    }
+  }, [dockCollapsed, loaded]);
   useEffect(() => {
     if (loaded)
       try {
@@ -1380,62 +1397,109 @@ export default function Planner() {
               onError={setMessage}
             />
           )}
-          <section className="mobile-map-dock" aria-label="Керування маршрутом">
-            {undoNotice}
-            {choosingStart ? (
-              <>
-                <div className="dock-heading">
-                  <h2>{start ? 'Новий старт' : 'Де почнемо?'}</h2>
-                  <span>
-                    {start
-                      ? 'Маршрут зміниться після підтвердження'
-                      : 'Оберіть місце на карті або GPS'}
-                  </span>
-                </div>
-                {startTools}
-                {!start && (
+          <section
+            className={
+              'mobile-map-dock' + (dockCollapsed ? ' is-collapsed' : '')
+            }
+            aria-label="Керування маршрутом"
+          >
+            <button
+              className="dock-toggle"
+              aria-expanded={!dockCollapsed}
+              aria-controls="mobile-dock-content"
+              aria-label={
+                dockCollapsed ? 'Розгорнути панель' : 'Згорнути панель'
+              }
+              onClick={() => setDockCollapsed(!dockCollapsed)}
+            >
+              <span className="dock-toggle-summary" aria-live="polite">
+                <strong>
+                  {busy || resizing
+                    ? resizing
+                      ? 'Підбираємо довжину…'
+                      : 'Будуємо маршрут…'
+                    : shownWalk
+                      ? `≈ ${fmt(steps)} кроків`
+                      : choosingStart
+                        ? start
+                          ? 'Новий старт'
+                          : 'Де почнемо?'
+                        : 'Куди підемо?'}
+                </strong>
+                <span>
+                  {shownWalk
+                    ? `${(shownWalk.meters / 1000).toLocaleString('uk-UA', { maximumFractionDigits: 2 })} км · ${Math.round(shownWalk.seconds / 60)} хв`
+                    : choosingStart
+                      ? 'Оберіть місце на карті або GPS'
+                      : `${modeNames[mode]} · ще ${fmt(remaining)} кроків`}
+                </span>
+              </span>
+              <span className="dock-toggle-action" aria-hidden="true">
+                {dockCollapsed && notices && <Info size={16} />}
+                {dockCollapsed ? 'Розгорнути' : 'Згорнути'}
+                {dockCollapsed ? (
+                  <ChevronUp size={18} />
+                ) : (
+                  <ChevronDown size={18} />
+                )}
+              </span>
+            </button>
+            <div
+              id="mobile-dock-content"
+              className="dock-content"
+              hidden={dockCollapsed}
+            >
+              {choosingStart ? (
+                <>
+                  {startTools}
+                  {!start && (
+                    <button
+                      className="text-button demo-start"
+                      onClick={() =>
+                        chooseStart(DEFAULT_START, 'Майдан Незалежності, Київ')
+                      }
+                    >
+                      Спробувати в Києві <ArrowRight size={15} />
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  {shownWalk && (
+                    <p className="dock-route-state">
+                      {editingRoute ? 'Редагування' : 'Готовий маршрут'}
+                      {' · '}
+                      {back || mode === 'auto' ? 'З поверненням' : 'В один бік'}
+                    </p>
+                  )}
+                  {!shownWalk && modePicker}
+                  {lengthOpen && shownWalk && (
+                    <div className="dock-length-control">{lengthControl}</div>
+                  )}
+                  {(planning || busy || resizing) && (
+                    <p className="dock-instruction" aria-live="polite">
+                      {busy ? 'Шукаємо пішохідні доріжки…' : instruction}
+                    </p>
+                  )}
+                  {mainAction}
+                  {editorActions}
+                  {routeActions}
                   <button
-                    className="text-button demo-start"
-                    onClick={() =>
-                      chooseStart(DEFAULT_START, 'Майдан Незалежності, Київ')
-                    }
+                    className="dock-details"
+                    onClick={() => setPanelOpen(true)}
                   >
-                    Спробувати в Києві <ArrowRight size={15} />
+                    <span>
+                      {shownWalk
+                        ? 'Деталі та параметри'
+                        : 'Параметри прогулянки'}
+                    </span>
+                    <ChevronRight size={17} />
                   </button>
-                )}
-              </>
-            ) : (
-              <>
-                {summary || (
-                  <div className="dock-heading">
-                    <h2>Куди підемо?</h2>
-                    <span>До денної цілі: {fmt(remaining)} кроків</span>
-                  </div>
-                )}
-                {!shownWalk && modePicker}
-                {lengthOpen && shownWalk && (
-                  <div className="dock-length-control">{lengthControl}</div>
-                )}
-                {(planning || busy || resizing) && (
-                  <p className="dock-instruction" aria-live="polite">
-                    {busy ? 'Шукаємо пішохідні доріжки…' : instruction}
-                  </p>
-                )}
-                {mainAction}
-                {editorActions}
-                {routeActions}
-                <button
-                  className="dock-details"
-                  onClick={() => setPanelOpen(true)}
-                >
-                  <span>
-                    {shownWalk ? 'Деталі та параметри' : 'Параметри прогулянки'}
-                  </span>
-                  <ChevronRight size={17} />
-                </button>
-              </>
-            )}
-            {notices}
+                </>
+              )}
+              {undoNotice}
+              {notices}
+            </div>
           </section>
           <div className="map-bottom-tip">
             <span className="tip-icon">

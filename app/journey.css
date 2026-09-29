@@ -341,17 +341,101 @@
     inset: auto;
     flex: 0 0 auto;
     width: 100%;
-    max-height: 55dvh;
-    overflow-y: auto;
+    max-height: 50dvh;
+    overflow: hidden;
     overscroll-behavior: contain;
-    gap: 10px;
-    padding: 14px 14px max(12px, env(safe-area-inset-bottom));
+    gap: 6px;
+    padding: 8px 12px max(8px, env(safe-area-inset-bottom));
     border: 0;
     border-top: 1px solid var(--border);
     border-radius: 0;
     background: #fff;
     box-shadow: 0 -3px 16px #163c3212;
     z-index: 8;
+  }
+  .dock-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    gap: 8px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #274b3e;
+    text-align: left;
+    cursor: pointer;
+  }
+  .dock-toggle:focus-visible {
+    outline: 3px solid #a5c94d;
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  .dock-toggle-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .dock-toggle-summary > strong {
+    font-size: 16px;
+    font-weight: 650;
+    line-height: 1.3;
+  }
+  .dock-toggle-summary > span {
+    color: #526d60;
+    font-size: 12px;
+    line-height: 1.35;
+  }
+  .dock-toggle-action {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 4px;
+    font-size: 12px;
+  }
+  .dock-content {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .dock-content[hidden] {
+    display: none;
+  }
+  .dock-content > * {
+    flex-shrink: 0;
+  }
+  .journey-shell .mobile-map-dock.is-collapsed {
+    gap: 0;
+  }
+  .dock-route-state {
+    color: #526d60;
+    font-size: 12px;
+    margin: 0;
+  }
+  .mobile-map-dock .journey-modes[data-slot] {
+    height: 52px;
+  }
+  .mobile-map-dock .journey-modes [data-slot='tabs-trigger'] {
+    height: 44px;
+    font-size: 13px;
+  }
+  .journey-shell .mobile-map-dock .journey-actions button,
+  .journey-shell .mobile-map-dock .journey-start-tools button,
+  .journey-shell .mobile-map-dock .primary-button,
+  .journey-shell .mobile-map-dock .pending-action {
+    min-height: 44px;
+    padding: 8px;
+    font-size: 13px;
+  }
+  .mobile-map-dock .route-undo {
+    padding: 0 8px;
+    font-size: 13px;
   }
   .dock-heading {
     display: flex;
@@ -370,8 +454,8 @@
   }
   .dock-instruction {
     margin: 0;
-    font-size: 14px;
-    line-height: 1.45;
+    font-size: 13px;
+    line-height: 1.4;
     color: #526d60;
   }
   .dock-details {
@@ -487,6 +571,17 @@
     border-top: 0;
     border-left: 1px solid var(--border);
     padding: 12px;
+  }
+  .journey-shell .map-area:has(.mobile-map-dock.is-collapsed) {
+    flex-direction: column;
+  }
+  .journey-shell .mobile-map-dock.is-collapsed {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    padding: 8px 12px max(8px, env(safe-area-inset-bottom));
+    border-left: 0;
+    border-top: 1px solid var(--border);
   }
   .journey-shell .mobile-editor-bar {
     grid-template-columns: repeat(5, minmax(0, 1fr));
